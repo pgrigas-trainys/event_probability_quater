@@ -125,6 +125,77 @@ condition_probability <- function(M, conds) {
   sum(g$p[ok])
 }
 
+# ---------- kėlinio dalių modelis (kaip app/model.js periodShareModel) ----------
+# Komandos kėlinio taškai = jos visų rungtynių taškų dalis: Qh = Sh·H, Qa = Sa·A, S ~ Beta(c·m, c·(1−m)),
+# dalys nepriklausomos nuo H, A ir viena nuo kitos (kaip žaidėjų dalys komandos taškuose).
+# E Qh = m·μh, Var Qh = (v + m²)(σh² + μh²) − m²μh² (v = m(1−m)/(c+1)), Cov(Qh, Qa) = mh·ma·ρ·σh·σa.
+# mh, ma ir c parenkami pagal kėlinio linijas (probit paklaida); silpna prielaida m = 25 %, c = 50.
+PERIOD_SHARE0 <- 0.25
+PERIOD_C0 <- 50
+PERIOD_PRIOR_W <- 1e-3
+SHARE_X <- list(hcp = c(1, -1), tot = c(1, 1), home = c(1, 0), away = c(0, 1))
+
+share_moments <- function(M, mh, ma, c) {
+  rho <- max(-0.95, min(0.95, M$rho))
+  vh <- mh * (1 - mh) / (c + 1); va <- ma * (1 - ma) / (c + 1)
+  sh <- sqrt((vh + mh^2) * (M$sh^2 + M$mh^2) - (mh * M$mh)^2)
+  sa <- sqrt((va + ma^2) * (M$sa^2 + M$ma^2) - (ma * M$ma)^2)
+  list(mh = mh * M$mh, ma = ma * M$ma, sh = sh, sa = sa,
+       rho = max(-0.95, min(0.95, mh * ma * rho * M$sh * M$sa / (sh * sa))))
+}
+
+period_p_over <- function(Q, key, k) {
+  x <- SHARE_X[[key]][1]; y <- SHARE_X[[key]][2]
+  sd <- sqrt(x^2 * Q$sh^2 + y^2 * Q$sa^2 + 2 * x * y * Q$rho * Q$sh * Q$sa)
+  1 - pnorm((k - (x * Q$mh + y * Q$ma)) / sd)
+}
+
+.probit <- function(p) qnorm(min(0.995, max(0.005, p)))
+
+# Toks pat deterministinis Nelder–Mead kaip app/model.js.
+nelder_mead <- function(f, x0, step, iters = 600) {
+  n <- length(x0)
+  X <- rbind(x0, t(vapply(seq_len(n), function(i) x0 + ifelse(seq_len(n) == i, step[i], 0), numeric(n))))
+  fx <- apply(X, 1, f)
+  for (it in seq_len(iters)) {
+    o <- order(fx); X <- X[o, , drop = FALSE]; fx <- fx[o]
+    if (fx[n + 1] - fx[1] < 1e-14) break
+    cen <- colMeans(X[1:n, , drop = FALSE])
+    pt <- function(t) cen + t * (X[n + 1, ] - cen)
+    xr <- pt(-1); fr <- f(xr)
+    if (fr < fx[1]) {
+      xe <- pt(-2); fe <- f(xe)
+      if (fe < fr) { X[n + 1, ] <- xe; fx[n + 1] <- fe } else { X[n + 1, ] <- xr; fx[n + 1] <- fr }
+    } else if (fr < fx[n]) {
+      X[n + 1, ] <- xr; fx[n + 1] <- fr
+    } else {
+      xc <- if (fr < fx[n + 1]) pt(-0.5) else pt(0.5)
+      fc <- f(xc)
+      if (fc < min(fr, fx[n + 1])) { X[n + 1, ] <- xc; fx[n + 1] <- fc }
+      else for (i in 2:(n + 1)) { X[i, ] <- X[1, ] + 0.5 * (X[i, ] - X[1, ]); fx[i] <- f(X[i, ]) }
+    }
+  }
+  o <- order(fx)
+  list(x = X[o[1], ], f = fx[o[1]])
+}
+
+# M = pilno laiko score_model(); pts = sąrašas list(key, k, p) iš kėlinio koeficientų.
+period_share_model <- function(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+  if (is.null(M)) return(NULL)
+  P <- Filter(function(q) !is.null(SHARE_X[[q[[1]]]]) && is.finite(q[[2]]) && q[[3]] > 0 && q[[3]] < 1, pts)
+  l0 <- log(share0); lc <- log(c0)
+  at <- function(u) share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]))
+  err <- function(Q) sum(vapply(P, function(q) (.probit(period_p_over(Q, q[[1]], q[[2]])) - .probit(q[[3]]))^2, 0))
+  obj <- function(u) {
+    if (u[1] < log(0.02) || u[1] > log(0.9) || u[2] < log(0.02) || u[2] > log(0.9) || u[3] < log(2) || u[3] > log(5000)) return(1e9)
+    err(at(u)) + PERIOD_PRIOR_W * ((u[1] - l0)^2 + (u[2] - l0)^2 + (u[3] - lc)^2)
+  }
+  u <- if (length(P)) nelder_mead(obj, c(l0, l0, lc), c(0.2, 0.2, 0.5))$x else c(l0, l0, lc)
+  Q <- at(u)
+  c(Q, list(rho_tot = NULL, rho_hcp = NULL, src = "pilnas laikas × kėlinio dalis",
+            share = list(h = exp(u[1]), a = exp(u[2]), c = exp(u[3]), n = length(P), sse = err(Q))))
+}
+
 parse_cond <- function(text) {
   m <- regmatches(text, regexec("^\\s*(home|away|total|diff)\\s*(>=|<=|>|<|=)\\s*(-?[0-9]+(?:[.,][0-9]+)?)\\s*$", text))[[1]]
   if (!length(m)) stop("Sąlyga turi būti pvz. home>75, diff<0: ", text)

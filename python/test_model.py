@@ -121,9 +121,37 @@ def test_quarter_sigma0():
     near(q.mu, 2.5, 1e-9, "kėlinio vidurkis")
 
 
+def test_period_share():
+    FT = m.ScoreModel(mh=88, ma=78, sh=10, sa=10, rho=0.3, src="")
+    truth = m.share_moments(FT, 0.27, 0.23, 80)
+    pts = [(key, k, m.period_p_over(truth, key, k)) for key, ks in
+           [("hcp", [-3.5, -1.5, 0.5, 2.5]), ("tot", [38.5, 41.5, 44.5]), ("home", [21.5, 24.5]), ("away", [16.5, 18.5])] for k in ks]
+    Q, s = m.period_share_model(FT, pts)
+    near(s["h"], 0.27, 1e-3, "namų kėlinio dalis")
+    near(s["a"], 0.23, 1e-3, "svečių kėlinio dalis")
+    near(s["c"], 80, 2, "koncentracija c")
+    Q0, s0 = m.period_share_model(FT, [])
+    assert s0["h"] == 0.25 and Q0.mh == 22
+    assert m.period_share_model(None, pts) is None
+    # Monte Carlo: dalys iš Beta, taškai iš dvimačio normaliojo -> momentai sutampa su formulėmis.
+    if m.np is not None:
+        rng = m.np.random.default_rng(1)
+        n = 400_000
+        z1, z2 = rng.standard_normal(n), rng.standard_normal(n)
+        H = 88 + 10 * z1
+        A = 78 + 10 * (0.3 * z1 + math.sqrt(1 - 0.09) * z2)
+        qh = rng.beta(80 * 0.27, 80 * 0.73, n) * H
+        qa = rng.beta(80 * 0.23, 80 * 0.77, n) * A
+        near(float(qh.std()), truth.sh, 0.03, "MC kėlinio σ namų")
+        near(float(qa.std()), truth.sa, 0.03, "MC kėlinio σ svečių")
+        near(float(m.np.corrcoef(qh, qa)[0, 1]), truth.rho, 0.01, "MC kėlinio ρ")
+        print(f"Kėlinio Monte Carlo: σ {qh.std():.3f} vs {truth.sh:.3f}, ρ {m.np.corrcoef(qh, qa)[0, 1]:.4f} vs {truth.rho:.4f}")
+
+
 if __name__ == "__main__":
     F, M = test_model()
     test_joint_model()
     test_against_scipy(F, M)
     test_quarter_sigma0()
+    test_period_share()
     print("Visi Python testai praėjo.")

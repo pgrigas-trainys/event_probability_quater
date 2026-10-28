@@ -67,4 +67,18 @@ as <- round(M$ma + M$sa * (M$rho * z1 + sqrt(1 - M$rho^2) * z2))
 mc <- mean(hs > 75 & as > 75 & hs < as)
 near(p_both, mc, 1.5e-3, "sąlyga prieš Monte Carlo")
 cat(sprintf("Monte Carlo palyginimas: sąlyga %.2f%% (modelis) vs %.2f%% (Monte Carlo)\n", p_both * 100, mc * 100))
+
+# Kėlinio dalių modelis: iš žinomų dalių sugeneruotos kėlinio linijos -> dalys atkuriamos.
+FTm <- list(mh = 88, ma = 78, sh = 10, sa = 10, rho = 0.3)
+truth <- share_moments(FTm, 0.27, 0.23, 80)
+pts <- list()
+for (mk in list(list("hcp", c(-3.5, -1.5, 0.5, 2.5)), list("tot", c(38.5, 41.5, 44.5)), list("home", c(21.5, 24.5)), list("away", c(16.5, 18.5))))
+  for (k in mk[[2]]) pts[[length(pts) + 1]] <- list(mk[[1]], k, period_p_over(truth, mk[[1]], k))
+Rq <- period_share_model(FTm, pts)
+near(Rq$share$h, 0.27, 1e-3, "namų kėlinio dalis")
+near(Rq$share$a, 0.23, 1e-3, "svečių kėlinio dalis")
+near(Rq$share$c, 80, 2, "koncentracija c")
+D <- period_share_model(FTm, list())
+near(D$mh, 22, 1e-12, "numatyta kėlinio dalis")
+
 cat("Visi R testai praėjo.\n")

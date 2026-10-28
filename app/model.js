@@ -123,6 +123,71 @@ function conditionProbability(M, conds) {
   return p;
 }
 
+// ---------- kėlinio dalių modelis ----------
+// Kaip žaidėjų dalys komandos taškuose (event_probability_players): kai yra pilno laiko rezultato modelis M,
+// komandos kėlinio taškai laikomi jos visų rungtynių taškų dalimi:  Qh = Sh·H,  Qa = Sa·A.
+// Dalis S ~ Beta(c·m, c·(1−m)) (vidurkis m, dispersija m(1−m)/(c+1)), nepriklausoma nuo H, A ir kitos komandos dalies.
+// Iš to kėlinio taškų vidurkiai, σ ir koreliacija:
+//   E Qh = m·μh,   Var Qh = (v + m²)(σh² + μh²) − m²μh²,   Cov(Qh, Qa) = mh·ma·ρ·σh·σa
+// ir kėlinys skaičiuojamas tuo pačiu dvimačiu normaliuoju modeliu kaip pilnas laikas.
+// Dalys mh, ma ir c parenkamos, kad modelio tikimybės geriausiai atkurtų kėlinio linijas (probit paklaida, kaip žaidėjams).
+// Labai silpna prielaida (m = 25 %, c = 50) lemia tik tai, ko linijos neapibrėžia; be kėlinio linijų imama ji pati.
+const PERIOD_SHARE0 = 0.25, PERIOD_C0 = 50, PERIOD_PRIOR_W = 1e-3;
+const SHARE_X = { hcp: [1, -1], tot: [1, 1], home: [1, 0], away: [0, 1] };
+function shareMoments(M, mh, ma, c) {
+  const rho = Math.max(-0.95, Math.min(0.95, M.rho));
+  const vh = mh * (1 - mh) / (c + 1), va = ma * (1 - ma) / (c + 1);
+  const sh = Math.sqrt((vh + mh * mh) * (M.sh ** 2 + M.mh ** 2) - (mh * M.mh) ** 2);
+  const sa = Math.sqrt((va + ma * ma) * (M.sa ** 2 + M.ma ** 2) - (ma * M.ma) ** 2);
+  return { mh: mh * M.mh, ma: ma * M.ma, sh, sa, rho: Math.max(-0.95, Math.min(0.95, mh * ma * rho * M.sh * M.sa / (sh * sa))) };
+}
+// P(X > k) kėlinio modelyje, X pagal rinką: handikapas H − A, suma H + A, namų H, svečių A.
+function periodPOver(Q, key, k) {
+  const [x, y] = SHARE_X[key];
+  const sd = Math.sqrt(x * x * Q.sh ** 2 + y * y * Q.sa ** 2 + 2 * x * y * Q.rho * Q.sh * Q.sa);
+  return 1 - Phi((k - (x * Q.mh + y * Q.ma)) / sd);
+}
+const probitC = p => PhiInv(Math.min(0.995, Math.max(0.005, p)));
+// Nelder–Mead minimizavimas (deterministinis, toks pat Python ir R versijose).
+function nelderMead(f, x0, step, iters = 600) {
+  const n = x0.length;
+  let S = [x0.slice(), ...x0.map((_, i) => x0.map((v, j) => v + (i === j ? step[i] : 0)))].map(x => [x, f(x)]);
+  for (let it = 0; it < iters; it++) {
+    S.sort((a, b) => a[1] - b[1]);
+    if (S[n][1] - S[0][1] < 1e-14) break;
+    const cen = x0.map((_, j) => S.slice(0, n).reduce((s, p) => s + p[0][j], 0) / n);
+    const pt = t => cen.map((c, j) => c + t * (S[n][0][j] - c));
+    const xr = pt(-1), fr = f(xr);
+    if (fr < S[0][1]) { const xe = pt(-2), fe = f(xe); S[n] = fe < fr ? [xe, fe] : [xr, fr]; }
+    else if (fr < S[n - 1][1]) S[n] = [xr, fr];
+    else {
+      const xc = fr < S[n][1] ? pt(-0.5) : pt(0.5), fc = f(xc);
+      if (fc < Math.min(fr, S[n][1])) S[n] = [xc, fc];
+      else S = S.map((p, i) => { if (!i) return p; const x = p[0].map((v, j) => S[0][0][j] + 0.5 * (v - S[0][0][j])); return [x, f(x)]; });
+    }
+  }
+  S.sort((a, b) => a[1] - b[1]);
+  return S[0];
+}
+// M = pilno laiko scoreModel(); pts = [{key: "hcp"|"tot"|"home"|"away", k, p}] (kėlinio rinkų P(X > k) be maržos).
+function periodShareModel(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+  if (!M) return null;
+  const P = (pts || []).filter(q => SHARE_X[q.key] && isFinite(q.k) && q.p > 0 && q.p < 1);
+  const l0 = Math.log(share0), lc = Math.log(c0);
+  const at = u => shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]));
+  const obj = u => {
+    if (u[0] < Math.log(0.02) || u[0] > Math.log(0.9) || u[1] < Math.log(0.02) || u[1] > Math.log(0.9) || u[2] < Math.log(2) || u[2] > Math.log(5000)) return 1e9;
+    const Q = at(u); let s = 0;
+    for (const q of P) s += (probitC(periodPOver(Q, q.key, q.k)) - probitC(q.p)) ** 2;
+    return s + PERIOD_PRIOR_W * ((u[0] - l0) ** 2 + (u[1] - l0) ** 2 + (u[2] - lc) ** 2);
+  };
+  const u = P.length ? nelderMead(obj, [l0, l0, lc], [0.2, 0.2, 0.5])[0] : [l0, l0, lc];
+  let sse = 0; const Q = at(u);
+  for (const q of P) sse += (probitC(periodPOver(Q, q.key, q.k)) - probitC(q.p)) ** 2;
+  return { ...Q, rho_tot: null, rho_hcp: null, src: "pilnas laikas × kėlinio dalis",
+    share: { h: Math.exp(u[0]), a: Math.exp(u[1]), c: Math.exp(u[2]), n: P.length, sse } };
+}
+
 // ---------- CSV įkėlimas ----------
 // Kiekvienoje eilutėje imami pirmi trys skaitiniai stulpeliai: linija, koeficientas A, koeficientas B
 // (handikapui A = namai, B = svečiai; sumoms A = daugiau, B = mažiau).
@@ -163,5 +228,6 @@ function parseOddsCSV(text) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { erf, Phi, PhiInv, rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, VARS, OPS, parseOddsCSV };
+  module.exports = { erf, Phi, PhiInv, rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, VARS, OPS, parseOddsCSV,
+    shareMoments, periodPOver, nelderMead, periodShareModel, PERIOD_SHARE0, PERIOD_C0 };
 }

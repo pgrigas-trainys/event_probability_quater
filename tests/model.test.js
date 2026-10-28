@@ -107,4 +107,21 @@ const ph = M.conditionProbability(QSM, [{ v: "diff", op: ">", x: 0 }]), pa = M.c
 assert.ok(pd > 0.03 && pd < 0.15, `kėlinio lygiosios ${pd}`);
 near(ph + pd + pa, 1, 1e-9, "pergalė + lygiosios + pralaimėjimas");
 
+// Kėlinio dalių modelis (kaip žaidėjų dalys): iš žinomų dalių sugeneruotos kėlinio linijos -> dalys atkuriamos.
+{
+  const FT = { mh: 88, ma: 78, sh: 10, sa: 10, rho: 0.3 };
+  const truth = M.shareMoments(FT, 0.27, 0.23, 80), pts = [];
+  for (const [key, ks] of [["hcp", [-3.5, -1.5, 0.5, 2.5]], ["tot", [38.5, 41.5, 44.5]], ["home", [21.5, 24.5]], ["away", [16.5, 18.5]]])
+    for (const k of ks) pts.push({ key, k, p: M.periodPOver(truth, key, k) });
+  const R = M.periodShareModel(FT, pts);
+  near(R.share.h, 0.27, 1e-3, "namų kėlinio dalis"); near(R.share.a, 0.23, 1e-3, "svečių kėlinio dalis");
+  near(R.share.c, 80, 2, "koncentracija c"); near(R.mh, 23.76, 0.02, "kėlinio namų vidurkis");
+  const D = M.periodShareModel(FT, []); // be kėlinio koeficientų: numatyta 25 %, c = 50
+  assert.equal(D.share.h, 0.25); assert.equal(D.mh, 22); assert.equal(D.ma, 19.5);
+  near(D.sh, Math.sqrt((0.1875 / 51 + 0.0625) * (100 + 88 * 88) - 22 * 22), 1e-9, "kėlinio σ");
+  assert.equal(M.periodShareModel(null, pts), null);
+  const one = M.periodShareModel(FT, [{ key: "tot", k: 40.5, p: 0.5 }]); // viena linija: suma atkuriama, dalys beveik lygios
+  near(one.mh + one.ma, 40.5, 0.05, "kėlinio suma iš vienos linijos"); near(one.share.h, one.share.a, 0.01, "lygios dalys");
+}
+
 console.log("Visi skaičiavimų testai praėjo.");

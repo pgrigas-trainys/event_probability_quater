@@ -292,15 +292,18 @@ const PERIODS = [
 const per = () => PERIODS.find(p => p.key === state.period) || PERIODS[0];
 const isFT = () => per().key === "ft";
 // Numatytoji σ priklauso nuo pasirinkto kėlinio.
-MARKETS.forEach(m => { const base = m.sigma0; Object.defineProperty(m, "sigma0", { get: () => base * per().scale, enumerable: true }); });
+MARKETS.forEach(m => { const base = m.base = m.sigma0; Object.defineProperty(m, "sigma0", { get: () => base * per().scale, enumerable: true }); });
 const KEY = "event-probability-quater-v1", OLD_KEY = "event-probability-v1";
 
 // ---------- skaičiavimo variklis: JavaScript (model.js) arba Python (model.py per Brython) ----------
-const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability };
+const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, periodShareModel };
 let E = JS_ENGINE; // keičiama į laiką matuojančią versiją setEngine()
 const BRYTHON = "https://cdn.jsdelivr.net/npm/brython@3.14.3/";
 const PY_BRIDGE = `
 import json
+
+def _sm(d):
+    return ScoreModel(**{k: v for k, v in d.items() if k in ScoreModel.__dataclass_fields__})
 
 def _bridge(name, args_json):
     a = json.loads(args_json)
@@ -317,9 +320,12 @@ def _bridge(name, args_json):
         M = score_model(F)
         return json.dumps(vars(M) if M else None)
     if name == "grid_cells":
-        return json.dumps(grid_cells(ScoreModel(**a[0])))
+        return json.dumps(grid_cells(_sm(a[0])))
     if name == "condition_probability":
-        return json.dumps(condition_probability(ScoreModel(**a[0]), [tuple(c) for c in a[1]]))
+        return json.dumps(condition_probability(_sm(a[0]), [tuple(c) for c in a[1]]))
+    if name == "period_share_model":
+        r = period_share_model(_sm(a[0]), [tuple(x) for x in a[1]])
+        return json.dumps({**vars(r[0]), "share": r[1]} if r else None)
     raise ValueError(name)
 `;
 const numRow = r => { const v = [r.l, r.a, r.b].map(x => parseFloat(String(x).replace(",", "."))); return v.every(isFinite) ? v : null; };
@@ -338,6 +344,7 @@ const PY_ENGINE = {
   scoreModel: F => py("score_model", [F]),
   gridCells: M => py("grid_cells", [M]),
   conditionProbability: (M, conds) => py("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])]),
+  periodShareModel: (M, pts) => M ? py("period_share_model", [M, pts.map(q => [q.key, q.k, q.p])]) : null,
 };
 const loadScript = src => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error(src)); document.head.append(s); });
 let pyReady = null, pyKind = "";
@@ -416,6 +423,7 @@ r_bridge <- function(reqs) {
       grid_cells = unname(as.matrix(grid_cells(a[[1]]))),
       condition_probability = condition_probability(a[[1]],
         lapply(a[[2]], function(c) list(v = c[[1]], op = c[[2]], x = c[[3]]))),
+      period_share_model = period_share_model(a[[1]], a[[2]]),
       stop("nezinoma funkcija ", name))
   })
   .to_json(out)
@@ -477,6 +485,7 @@ const R_ENGINE = {
   scoreModel: F => rReq("score_model", [F], () => JS_ENGINE.scoreModel(F)),
   gridCells: M => rReq("grid_cells", [M], () => JS_ENGINE.gridCells(M)),
   conditionProbability: (M, conds) => rReq("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])], () => JS_ENGINE.conditionProbability(M, conds)),
+  periodShareModel: (M, pts) => M ? rReq("period_share_model", [M, pts.map(q => [q.key, q.k, q.p])], () => JS_ENGINE.periodShareModel(M, pts)) : null,
 };
 
 // Matuojamas laikas atskirai: kiek užtrunka patys skaičiavimai (model.js / model.py), o kiek puslapio piešimas.
@@ -654,27 +663,51 @@ function calcOut(key) {
   }
 }
 
+// ---------- kurio modelio rezultatas rodomas ----------
+// Pilnas laikas: rinkų modelis. Kėlinys: jei yra pilno laiko modelis, kėlinio taškai = komandos visų rungtynių
+// taškų dalis (kaip žaidėjų dalys komandos taškuose); dalis įvertinama iš kėlinio linijų, o jų nesant imama 25 %.
+// Jei pilno laiko modelio nėra, kėlinys skaičiuojamas iš savo koeficientų taip pat kaip pilnas laikas.
+function ftModel() {
+  return E.scoreModel(Object.fromEntries(MARKETS.map(m => [m.key, E.fit({ key: m.key, sigma0: m.base }, state.per.ft.rows[m.key])])));
+}
+function periodPoints() {
+  const pts = [];
+  for (const m of MARKETS) for (const r of state.rows[m.key]) { const c = E.rowCalc(m, r); if (c) pts.push({ key: m.key, k: c.k, p: c.pa }); }
+  return pts;
+}
+function modelFor(F) {
+  if (isFT()) return E.scoreModel(F);
+  const MF = ftModel();
+  return MF ? E.periodShareModel(MF, periodPoints()) : E.scoreModel(F);
+}
+const pct1 = p => (p * 100).toFixed(1) + "%";
+
 function renderSummary() {
   const F = Object.fromEntries(MARKETS.map(m => [m.key, E.fit(m, state.rows[m.key])]));
   const cards = [];
-  const SM = E.scoreModel(F);
+  const SM = modelFor(F);
   if (!isFT() && SM) {
     // Kėlinys gali baigtis lygiosiomis, todėl pergalės ir lygiųjų tikimybės imamos iš rezultatų tinklelio.
     const ph = E.conditionProbability(SM, [{ v: "diff", op: ">", x: 0 }]), pd = E.conditionProbability(SM, [{ v: "diff", op: "=", x: 0 }]), pa = Math.max(0, 1 - ph - pd);
     cards.push(`<div class="kpi lead"><small>${esc(homeN())} laimės kėlinį</small><b class="num">${pct(ph)}</b>
       <span>${esc(awayN())}: ${pct(pa)} · lygiosios: ${pct(pd)}</span><div class="bar2"><i class="h" style="width:${ph * 100}%"></i><i class="d" style="width:${pd * 100}%"></i><i class="a" style="width:${pa * 100}%"></i></div></div>`);
-    if (F.hcp) cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(F.hcp.mu)}</b><span>${esc(homeN())} naudai · σ ${F.hcp.sigma.toFixed(1)}</span></div>`);
+    const dsd = Math.sqrt(SM.sh ** 2 + SM.sa ** 2 - 2 * SM.rho * SM.sh * SM.sa), tsd = Math.sqrt(SM.sh ** 2 + SM.sa ** 2 + 2 * SM.rho * SM.sh * SM.sa);
+    cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(SM.mh - SM.ma)}</b><span>${esc(homeN())} naudai · σ ${dsd.toFixed(1)}</span></div>`);
+    cards.push(`<div class="kpi"><small>Tikėtina kėlinio suma</small><b class="num">${(SM.mh + SM.ma).toFixed(1)}</b><span>σ ${tsd.toFixed(1)}</span></div>`);
+    if (SM.share) { const S = SM.share;
+      cards.push(`<div class="kpi"><small>Kėlinio dalis visų taškų</small><b class="num">${(S.h * 100).toFixed(1)} / ${(S.a * 100).toFixed(1)}%</b><span>${esc(homeN())} / ${esc(awayN())} · c ${S.c.toFixed(0)} · ${S.n ? `pagal ${S.n} kėlinio lin.` : "numatyta, nes kėlinio koeficientų nėra"}</span></div>`); }
   } else if (F.hcp) {
     const pw = E.pOver(F.hcp, 0);
     cards.push(`<div class="kpi lead"><small>Laimės ${esc(homeN())}</small><b class="num">${pct(pw)}</b>
       <span>${esc(awayN())}: ${pct(1 - pw)}</span><div class="bar2"><i class="h" style="width:${pw * 100}%"></i><i class="a" style="width:${(1 - pw) * 100}%"></i></div></div>`);
     cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(F.hcp.mu)}</b><span>${esc(homeN())} naudai · σ ${F.hcp.sigma.toFixed(1)}</span></div>`);
   }
-  if (F.tot) cards.push(`<div class="kpi"><small>Tikėtina taškų suma</small><b class="num">${F.tot.mu.toFixed(1)}</b><span>σ ${F.tot.sigma.toFixed(1)}</span></div>`);
+  if (F.tot && isFT()) cards.push(`<div class="kpi"><small>Tikėtina taškų suma</small><b class="num">${F.tot.mu.toFixed(1)}</b><span>σ ${F.tot.sigma.toFixed(1)}</span></div>`);
   if (SM) {
     cards.push(`<div class="kpi"><small>Tikėtinas rezultatas</small><b class="num">${SM.mh.toFixed(0)} : ${SM.ma.toFixed(0)}</b><span>σ ${SM.sh.toFixed(1)} / ${SM.sa.toFixed(1)} · iš: ${esc(SM.src)}</span></div>`);
     let why;
-    if (!F.hcp && !F.tot) why = "laikoma 0: koreliacijai įvertinti reikia sumos arba handikapo";
+    if (SM.share) why = "iš pilno laiko ρ ir kėlinio dalių";
+    else if (!F.hcp && !F.tot) why = "laikoma 0: koreliacijai įvertinti reikia sumos arba handikapo";
     else {
       const alt = [SM.rho_tot != null ? `pagal sumą ${SM.rho_tot.toFixed(3)}` : "", SM.rho_hcp != null ? `pagal handikapą ${SM.rho_hcp.toFixed(3)}` : ""].filter(Boolean);
       why = `iš: ${esc(SM.src)}` + (alt.length ? ` · atskirai ${alt.join(", ")}` : "");
@@ -684,8 +717,8 @@ function renderSummary() {
     if (F.home) cards.push(`<div class="kpi"><small>${esc(homeN())} taškai</small><b class="num">${F.home.mu.toFixed(1)}</b><span>σ ${F.home.sigma.toFixed(1)}</span></div>`);
     if (F.away) cards.push(`<div class="kpi"><small>${esc(awayN())} taškai</small><b class="num">${F.away.mu.toFixed(1)}</b><span>σ ${F.away.sigma.toFixed(1)}</span></div>`);
   }
-  renderCS(F);
-  renderQ(F);
+  renderCS(F, SM);
+  renderQ(F, SM);
   $("summary").innerHTML = cards.join("") || `<div class="kpi"><small>Santrauka</small><b>–</b><span>Įkelkite bent vienos rinkos koeficientus.</span></div>`;
 }
 
@@ -806,13 +839,14 @@ function disableScan(msg) {
 }
 
 // ---------- correct score ----------
-function renderCS(F) {
-  const M = E.scoreModel(F);
+function renderCS(F, M) {
+  if (M === undefined) M = modelFor(F);
   const step = [1, 3, 5].includes(state.csStep) ? state.csStep : 5;
   document.querySelectorAll("#csStep button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.step === step));
   if (!M) {
     $("csInfo").textContent = "";
-    $("csBoard").innerHTML = `<p class="note">Lentelei reikia bent dviejų rinkų koeficientų (pvz. handikapo ir sumos arba abiejų komandų taškų). Įveskite juos skiltyje „Koeficientai“.</p>`;
+    $("csBoard").innerHTML = `<p class="note">${isFT() ? "Lentelei reikia bent dviejų rinkų koeficientų (pvz. handikapo ir sumos arba abiejų komandų taškų). Įveskite juos skiltyje „Koeficientai“."
+      : "Kėlinio lentelei reikia pilno laiko koeficientų (bent dviejų rinkų) arba bent dviejų šio kėlinio rinkų koeficientų."}</p>`;
     $("csTop").innerHTML = `<p class="note">Kol kas nėra duomenų.</p>`;
     return;
   }
@@ -842,7 +876,7 @@ function renderCS(F) {
   }).join("");
   $("csBoard").innerHTML = `<table class="heat${step === 1 ? " fine" : ""}"><thead><tr><th class="corner"><b>${esc(homeN())}</b> ↓<br><i>${esc(awayN())}</i> →</th>${hdr}</tr></thead><tbody>${body}</tbody></table>`;
   centerTop();
-  $("csInfo").innerHTML = `${esc(homeN())} <b>${mh.toFixed(1)}</b> · ${esc(awayN())} <b>${ma.toFixed(1)}</b> · ρ <b>${rho.toFixed(3)}</b> · ${M.src}`;
+  $("csInfo").innerHTML = `${esc(homeN())} <b>${mh.toFixed(1)}</b> · ${esc(awayN())} <b>${ma.toFixed(1)}</b> · ρ <b>${rho.toFixed(3)}</b> · ${esc(M.src)}`;
   const top = cells.filter(c => !isFT() || c[0] !== c[1]).sort((x, y) => y[2] - x[2]).slice(0, 10);
   $("csTop").innerHTML = top.map(([h, a, p], i) =>
     `<div class="r"><span>${i + 1}</span><b><span class="h">${h}</span> : <span class="a">${a}</span></b><em>${(p * 100).toFixed(2)}%</em></div>`).join("");
@@ -869,12 +903,12 @@ function condsHTML() {
     <button class="x" type="button" data-cdel="${i}" aria-label="Pašalinti sąlygą">×</button></div>`).join("");
 }
 function renderConds() { $("conds").innerHTML = condsHTML(); }
-function renderQ(F) {
+function renderQ(F, M) {
   F ||= Object.fromEntries(MARKETS.map(m => [m.key, E.fit(m, state.rows[m.key])]));
-  const M = E.scoreModel(F);
+  if (M === undefined) M = modelFor(F);
   const conds = state.conds.map(c => ({ f: VARS.find(v => v[0] === c.v)?.[1], op: OPS[c.op], x: parseFloat(String(c.x).replace(",", ".")) }))
     .filter(c => c.f && c.op && isFinite(c.x));
-  if (!M) { $("qP").textContent = "–"; $("qFair").textContent = ""; $("qNote").textContent = "Reikia handikapo ir taškų sumos koeficientų skiltyje „Koeficientai“."; return; }
+  if (!M) { $("qP").textContent = "–"; $("qFair").textContent = ""; $("qNote").textContent = isFT() ? "Reikia handikapo ir taškų sumos koeficientų skiltyje „Koeficientai“." : "Reikia pilno laiko koeficientų arba bent dviejų šio kėlinio rinkų koeficientų."; return; }
   if (!conds.length) { $("qP").textContent = "–"; $("qFair").textContent = ""; $("qNote").textContent = "Pridėkite bent vieną sąlygą."; return; }
   const p = E.conditionProbability(M, state.conds.filter(c => VARS.some(v => v[0] === c.v) && OPS[c.op] && isFinite(parseFloat(String(c.x).replace(",", "."))))
     .map(c => ({ v: c.v, op: c.op, x: parseFloat(String(c.x).replace(",", ".")) })));
@@ -956,9 +990,12 @@ function renderPeriods() {
 function renderNotes() {
   const p = per();
   if (isFT()) { $("csNote").textContent = NOTES.cs; $("qNoteText").textContent = NOTES.q; $("oddsNote").textContent = NOTES.odds; return; }
-  $("csNote").textContent = `Rodomas tik ${p.gen} rezultatas, skaičiuojamas taip pat kaip pilnam laikui: iš šio kėlinio handikapo, sumos ir komandų taškų rinkų. Kėlinys gali baigtis lygiosiomis, todėl lygūs rezultatai rodomi ir sąraše.`;
+  const how = ftModel()
+    ? `Kėlinio taškai skaičiuojami kaip komandos visų rungtynių taškų dalis, kaip žaidėjų dalis komandos taškuose: komandos taškai imami iš pilno laiko modelio, o dalis įvertinama iš ${p.gen} koeficientų (jei jų nėra, imama 25 %).`
+    : `Pilno laiko koeficientų nėra, todėl ${p.title} skaičiuojamas iš savo koeficientų taip pat kaip pilnas laikas.`;
+  $("csNote").textContent = `Rodomas tik ${p.gen} rezultatas. ${how} Kėlinys gali baigtis lygiosiomis, todėl lygūs rezultatai rodomi ir sąraše.`;
   $("qNoteText").textContent = `Sąlygos taikomos tik ${p.gen} taškams. Visos sąlygos turi išsipildyti kartu. Kėlinyje lygiosios galimos ir nelaikomos nė vienos komandos pergale.`;
-  $("oddsNote").textContent = `Įveskite ${p.gen} rinkų koeficientus. ${NOTES.odds} Kai rinkoje tik viena linija, numatyta σ perpus mažesnė nei pilnam laikui.`;
+  $("oddsNote").textContent = `Įveskite ${p.gen} rinkų koeficientus. ${NOTES.odds} ${how} Kai pilno laiko modelio nėra ir rinkoje tik viena linija, numatyta σ perpus mažesnė nei pilnam laikui.`;
 }
 // Perjungus kėlinį perpiešiama viskas: koeficientų lentelės, nuotraukos, sąlygos ir santrauka.
 function setPeriod(k) {

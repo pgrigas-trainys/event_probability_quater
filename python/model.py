@@ -212,6 +212,90 @@ def condition_probability(M: ScoreModel, conds: list[tuple[str, str, float]]) ->
                if all(OPS[op](VARS[v](h, a), x) for v, op, x in conds))
 
 
+# ---------- kėlinio dalių modelis (kaip app/model.js periodShareModel) ----------
+# Komandos kėlinio taškai = jos visų rungtynių taškų dalis: Qh = Sh·H, Qa = Sa·A, S ~ Beta(c·m, c·(1−m)),
+# dalys nepriklausomos nuo H, A ir viena nuo kitos (kaip žaidėjų dalys komandos taškuose).
+# Iš to E Qh = m·μh, Var Qh = (v + m²)(σh² + μh²) − m²μh² (v = m(1−m)/(c+1)), Cov(Qh, Qa) = mh·ma·ρ·σh·σa.
+# mh, ma ir c parenkami, kad modelis geriausiai atkurtų kėlinio linijas (probit paklaida); labai silpna
+# prielaida m = 25 %, c = 50 lemia tik tai, ko linijos neapibrėžia.
+PERIOD_SHARE0 = 0.25
+PERIOD_C0 = 50.0
+PERIOD_PRIOR_W = 1e-3
+SHARE_X = {"hcp": (1, -1), "tot": (1, 1), "home": (1, 0), "away": (0, 1)}
+
+
+def share_moments(M: ScoreModel, mh: float, ma: float, c: float) -> ScoreModel:
+    rho = max(-0.95, min(0.95, M.rho))
+    vh, va = mh * (1 - mh) / (c + 1), ma * (1 - ma) / (c + 1)
+    sh = math.sqrt((vh + mh * mh) * (M.sh ** 2 + M.mh ** 2) - (mh * M.mh) ** 2)
+    sa = math.sqrt((va + ma * ma) * (M.sa ** 2 + M.ma ** 2) - (ma * M.ma) ** 2)
+    r = max(-0.95, min(0.95, mh * ma * rho * M.sh * M.sa / (sh * sa)))
+    return ScoreModel(mh=mh * M.mh, ma=ma * M.ma, sh=sh, sa=sa, rho=r, src="pilnas laikas × kėlinio dalis")
+
+
+def period_p_over(Q: ScoreModel, key: str, k: float) -> float:
+    x, y = SHARE_X[key]
+    sd = math.sqrt(x * x * Q.sh ** 2 + y * y * Q.sa ** 2 + 2 * x * y * Q.rho * Q.sh * Q.sa)
+    return 1 - N.cdf((k - (x * Q.mh + y * Q.ma)) / sd)
+
+
+def _probit(p: float) -> float:
+    return N.inv_cdf(min(0.995, max(0.005, p)))
+
+
+def nelder_mead(f, x0: list[float], step: list[float], iters: int = 600) -> tuple[list[float], float]:
+    """Toks pat deterministinis Nelder–Mead kaip app/model.js."""
+    n = len(x0)
+    S = [[list(x0), 0.0]] + [[[v + (step[i] if i == j else 0) for j, v in enumerate(x0)], 0.0] for i in range(n)]
+    for p in S:
+        p[1] = f(p[0])
+    for _ in range(iters):
+        S.sort(key=lambda p: p[1])
+        if S[n][1] - S[0][1] < 1e-14:
+            break
+        cen = [sum(p[0][j] for p in S[:n]) / n for j in range(n)]
+        pt = lambda t: [c + t * (S[n][0][j] - c) for j, c in enumerate(cen)]
+        xr = pt(-1); fr = f(xr)
+        if fr < S[0][1]:
+            xe = pt(-2); fe = f(xe)
+            S[n] = [xe, fe] if fe < fr else [xr, fr]
+        elif fr < S[n - 1][1]:
+            S[n] = [xr, fr]
+        else:
+            xc = pt(-0.5) if fr < S[n][1] else pt(0.5)
+            fc = f(xc)
+            if fc < min(fr, S[n][1]):
+                S[n] = [xc, fc]
+            else:
+                b = S[0][0]
+                S = [S[0]] + [[x, f(x)] for x in ([b[j] + 0.5 * (v - b[j]) for j, v in enumerate(p[0])] for p in S[1:])]
+    S.sort(key=lambda p: p[1])
+    return S[0][0], S[0][1]
+
+
+def period_share_model(M: ScoreModel | None, pts: list[tuple[str, float, float]],
+                       share0: float = PERIOD_SHARE0, c0: float = PERIOD_C0) -> tuple[ScoreModel, dict] | None:
+    """M = pilno laiko score_model(); pts = [(rinka, k, P(X > k) be maržos)] iš kėlinio koeficientų."""
+    if M is None:
+        return None
+    P = [(key, k, p) for key, k, p in pts if key in SHARE_X and math.isfinite(k) and 0 < p < 1]
+    l0, lc = math.log(share0), math.log(c0)
+    at = lambda u: share_moments(M, math.exp(u[0]), math.exp(u[1]), math.exp(u[2]))
+    lo_m, hi_m, lo_c, hi_c = math.log(0.02), math.log(0.9), math.log(2), math.log(5000)
+
+    def obj(u):
+        if not (lo_m <= u[0] <= hi_m and lo_m <= u[1] <= hi_m and lo_c <= u[2] <= hi_c):
+            return 1e9
+        Q = at(u)
+        s = sum((_probit(period_p_over(Q, key, k)) - _probit(p)) ** 2 for key, k, p in P)
+        return s + PERIOD_PRIOR_W * ((u[0] - l0) ** 2 + (u[1] - l0) ** 2 + (u[2] - lc) ** 2)
+
+    u = nelder_mead(obj, [l0, l0, lc], [0.2, 0.2, 0.5])[0] if P else [l0, l0, lc]
+    Q = at(u)
+    sse = sum((_probit(period_p_over(Q, key, k)) - _probit(p)) ** 2 for key, k, p in P)
+    return Q, {"h": math.exp(u[0]), "a": math.exp(u[1]), "c": math.exp(u[2]), "n": len(P), "sse": sse}
+
+
 def parse_cond(text: str) -> tuple[str, str, float]:
     m = re.fullmatch(r"\s*(home|away|total|diff)\s*(>=|<=|>|<|=)\s*(-?\d+(?:[.,]\d+)?)\s*", text)
     if not m:

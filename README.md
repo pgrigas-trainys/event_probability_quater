@@ -6,3 +6,14 @@ Viršuje pasirenkamas laikotarpis: **Pilnas laikas** arba **1–4 kėlinys**. Ki
 koeficientus (handikapas, taškų suma, komandų taškai) ir sąlygas, o skiltys „Koeficientai“,
 „Tikslus rezultatas“ ir „Sąlygos“ veikia taip pat kaip pilnam laikui. Kėliniui lygiosios galimos,
 todėl jos rodomos santraukoje ir tikslaus rezultato sąraše.
+
+## Kaip skaičiuojamas kėlinys
+
+- **Yra pilno laiko koeficientai** (bent tiek, kad būtų pilno laiko rezultato modelis): kėlinio taškai
+  skaičiuojami kaip komandos visų rungtynių taškų dalis, taip pat kaip `event_probability_players`
+  skaičiuoja žaidėjo dalį komandos taškuose. Dalis S ~ Beta(c·m, c·(1−m)), kėlinio taškai = S × komandos taškai.
+  Dalys (namų ir svečių) ir koncentracija c parenkamos pagal to kėlinio koeficientus; jei kėlinio
+  koeficientų nėra, imama 25 % ir c = 50.
+- **Pilno laiko koeficientų nėra**: kėlinys skaičiuojamas iš savo koeficientų taip pat kaip pilnas laikas.
+
+Tas pats modelis yra JavaScript (`app/model.js`), Python (`python/model.py`) ir R (`R/model.R`) versijose.
