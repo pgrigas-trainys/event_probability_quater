@@ -76,8 +76,9 @@ function wls(rows) { // rows: [x[], y, w] -> mažiausių kvadratų sprendinys ar
 }
 function scoreModel(F) {
   const keys = Object.keys(SCORE_ROWS).filter(k => F[k]);
+  if (!keys.length) return null; // dar nėra nė vienos rinkos (pvz. tuščias kėlinys)
   const mean = wls(keys.map(k => [SCORE_ROWS[k].m, F[k].mu, F[k].n / F[k].sigma ** 2]));
-  if (!keys.length || !mean) return null;
+  if (!mean) return null;
   // Rinkos su numatyta σ (viena linija) beveik nesveria; prielaidos sveria dar mažiau.
   const vRows = keys.map(k => [SCORE_ROWS[k].v, F[k].sigma ** 2, (F[k].assumed ? 1e-3 : 1) * F[k].n / F[k].sigma ** 4]);
   const wMax = Math.max(...vRows.map(r => r[2]));

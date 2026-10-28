@@ -112,8 +112,18 @@ def test_joint_model():
     assert m.score_model({"hcp": G["hcp"]}) is None
 
 
+def test_quarter_sigma0():
+    # Kėliniui su viena linija naudojama perduota (mažesnė) numatyta σ.
+    one = [(-2.5, 1.90, 1.90)]
+    assert m.fit("hcp", one).sigma == 12
+    q = m.fit("hcp", one, sigma0=6)
+    assert q.sigma == 6 and q.assumed
+    near(q.mu, 2.5, 1e-9, "kėlinio vidurkis")
+
+
 if __name__ == "__main__":
     F, M = test_model()
     test_joint_model()
     test_against_scipy(F, M)
+    test_quarter_sigma0()
     print("Visi Python testai praėjo.")

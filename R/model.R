@@ -27,7 +27,7 @@ row_calc <- function(market, line, a, b) {
 
 # ---------- normaliojo skirstinio įvertis ----------
 # P(X > k) = 1 - Φ((k - μ)/σ): z = Φ⁻¹(1 - p) tiesiškai priklauso nuo k, nuolydis = 1/σ.
-fit_market <- function(market, rows) {
+fit_market <- function(market, rows, sigma0 = NULL) {
   calc <- Filter(Negate(is.null), lapply(seq_len(nrow(rows)), function(i)
     row_calc(market, rows[i, 1], rows[i, 2], rows[i, 3])))
   if (!length(calc)) return(NULL)
@@ -44,7 +44,7 @@ fit_market <- function(market, rows) {
       }
     }
   }
-  sigma <- SIGMA0[[market]]
+  sigma <- if (is.null(sigma0)) SIGMA0[[market]] else sigma0
   list(mu = mean(k - z * sigma), sigma = sigma, n = n, assumed = TRUE)
 }
 

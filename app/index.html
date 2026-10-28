@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Rungtynių tikimybės</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -167,6 +168,13 @@ input[type=file] { display: none; }
 .qexamples { display: flex; gap: 6px; flex-wrap: wrap; }
 .qexamples button { border: 1px dashed var(--line); background: transparent; border-radius: 999px; padding: 3px 10px; font-size: .78rem; color: var(--muted); }
 .qexamples button:hover { color: var(--fg); border-color: var(--muted); }
+.periods { display: flex; gap: 6px; flex-wrap: wrap; }
+.periods button { position: relative; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 16px;
+  font-family: var(--f-display); font-size: 1.05rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.periods button:hover { color: var(--fg); border-color: var(--muted); }
+.periods button[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.periods button.has::after { content: ""; position: absolute; top: 5px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.bar2 .d { background: var(--muted); }
 .engine-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
 .engine-bar .seg button { font-family: var(--f-body); font-size: .82rem; padding: 5px 12px; }
 </style>
@@ -190,6 +198,8 @@ input[type=file] { display: none; }
     </div>
     <span class="status" id="engStatus"></span>
   </div>
+
+  <nav class="periods" id="period" role="group" aria-label="Kėlinys"></nav>
 
   <nav class="tabs" role="tablist" aria-label="Rodinys">
     <button type="button" role="tab" id="tab-odds" aria-controls="view-odds" aria-selected="true">Koeficientai</button>
@@ -216,7 +226,7 @@ input[type=file] { display: none; }
         <div class="toplist" id="csTop"></div>
       </div>
     </div>
-    <p class="note">Rezultatų tikimybės apskaičiuotos iš handikapo ir taškų sumos: abiejų komandų taškams pritaikytas dvimatis normalusis skirstinys, o ryšys tarp jų įvertintas iš abiejų rinkų σ. Jei įvestos tik komandų taškų rinkos, naudojamos jos. Lygiosios krepšinyje baigiasi pratęsimu, todėl jos sąraše nerodomos.</p>
+    <p class="note" id="csNote">Rezultatų tikimybės apskaičiuotos iš handikapo ir taškų sumos: abiejų komandų taškams pritaikytas dvimatis normalusis skirstinys, o ryšys tarp jų įvertintas iš abiejų rinkų σ. Jei įvestos tik komandų taškų rinkos, naudojamos jos. Lygiosios krepšinyje baigiasi pratęsimu, todėl jos sąraše nerodomos.</p>
   </section>
 
   <section id="view-q" role="tabpanel" aria-labelledby="tab-q" hidden>
@@ -240,7 +250,7 @@ input[type=file] { display: none; }
         <p id="qNote"></p>
       </div>
     </div>
-    <p class="note">Įrašykite sąlygą žodžiais ir Claude ją paverčia sąlygų sąrašu. Sąlygas galite pataisyti ar pridėti ranka. Visos sąlygos turi išsipildyti kartu. Skaičiuojama iš to paties modelio kaip tikslaus rezultato lenta, pagrindinio laiko rezultatui: lygiosios (po kurių būna pratęsimas) nelaikomos nė vienos komandos pergale.</p>
+    <p class="note" id="qNoteText">Įrašykite sąlygą žodžiais ir Claude ją paverčia sąlygų sąrašu. Sąlygas galite pataisyti ar pridėti ranka. Visos sąlygos turi išsipildyti kartu. Skaičiuojama iš to paties modelio kaip tikslaus rezultato lenta, pagrindinio laiko rezultatui: lygiosios (po kurių būna pratęsimas) nelaikomos nė vienos komandos pergale.</p>
   </section>
 
   <div id="view-odds" role="tabpanel" aria-labelledby="tab-odds">
@@ -254,7 +264,7 @@ input[type=file] { display: none; }
 
   <div class="markets" id="markets"></div>
 
-  <p class="note">Tikimybės be bukmekerio maržos. Vidurkis ir σ (standartinis nuokrypis) įvertinti pritaikius normalųjį skirstinį visoms tos rinkos linijoms. Skaičius lentelėje galima taisyti ranka.</p>
+  <p class="note" id="oddsNote">Tikimybės be bukmekerio maržos. Vidurkis ir σ (standartinis nuokrypis) įvertinti pritaikius normalųjį skirstinį visoms tos rinkos linijoms. Skaičius lentelėje galima taisyti ranka.</p>
   </div>
 </div>
 
@@ -264,13 +274,26 @@ const MARKETS = [
   { key: "hcp", title: "Handikapas", line: "Namų hcp", a: "Namai", b: "Svečiai", sigma0: 12,
     what: "the HANDICAP (point spread) market. line = the HOME (first-listed) team's handicap exactly as shown, e.g. -11.5; a = decimal odds for the home team with that handicap; b = decimal odds for the away team with the opposite handicap (+11.5)." },
   { key: "tot", title: "Taškų suma", line: "Linija", a: "Daugiau", b: "Mažiau", sigma0: 16,
-    what: "the TOTAL POINTS (over/under, \"Daugiau/Mažiau\") market for the whole game. line = the total points line, e.g. 165.5; a = decimal odds for OVER (Daugiau); b = decimal odds for UNDER (Mažiau)." },
+    what: "the TOTAL POINTS (over/under, \"Daugiau/Mažiau\") market. line = the total points line, e.g. 165.5; a = decimal odds for OVER (Daugiau); b = decimal odds for UNDER (Mažiau)." },
   { key: "home", title: "Namų komandos taškai", line: "Linija", a: "Daugiau", b: "Mažiau", sigma0: 10,
     what: "the HOME TEAM's own points total (over/under) market. line = the home team's points line, e.g. 88.5; a = decimal odds for OVER (Daugiau); b = decimal odds for UNDER (Mažiau). Ignore rows for the other team." },
   { key: "away", title: "Svečių komandos taškai", line: "Linija", a: "Daugiau", b: "Mažiau", sigma0: 10,
     what: "the AWAY TEAM's own points total (over/under) market. line = the away team's points line, e.g. 77.5; a = decimal odds for OVER (Daugiau); b = decimal odds for UNDER (Mažiau). Ignore rows for the other team." },
 ];
-const KEY = "event-probability-v1";
+// Kėliniai: kiekvienas turi savo koeficientus ir sąlygas, o skaičiuojama taip pat kaip pilnam laikui.
+// scale: numatytosios σ daugiklis, kai rinkoje tik viena linija (ketvirtis rungtynių -> σ maždaug perpus mažesnė).
+const PERIODS = [
+  { key: "ft", title: "Pilnas laikas", scale: 1, what: "the whole game (full time, as the betting site settles it)", ex: [75, 10, 160] },
+  { key: "q1", title: "1 kėlinys", gen: "1 kėlinio", scale: 0.5, what: "the 1st QUARTER only (not the whole game)", ex: [20, 3, 40] },
+  { key: "q2", title: "2 kėlinys", gen: "2 kėlinio", scale: 0.5, what: "the 2nd QUARTER only (not the whole game)", ex: [20, 3, 40] },
+  { key: "q3", title: "3 kėlinys", gen: "3 kėlinio", scale: 0.5, what: "the 3rd QUARTER only (not the whole game)", ex: [20, 3, 40] },
+  { key: "q4", title: "4 kėlinys", gen: "4 kėlinio", scale: 0.5, what: "the 4th QUARTER only, regulation time (not overtime, not the whole game)", ex: [20, 3, 40] },
+];
+const per = () => PERIODS.find(p => p.key === state.period) || PERIODS[0];
+const isFT = () => per().key === "ft";
+// Numatytoji σ priklauso nuo pasirinkto kėlinio.
+MARKETS.forEach(m => { const base = m.sigma0; Object.defineProperty(m, "sigma0", { get: () => base * per().scale, enumerable: true }); });
+const KEY = "event-probability-quater-v1", OLD_KEY = "event-probability-v1";
 
 // ---------- skaičiavimo variklis: JavaScript (model.js) arba Python (model.py per Brython) ----------
 const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability };
@@ -285,7 +308,7 @@ def _bridge(name, args_json):
         r = row_calc(*a)
         return json.dumps(vars(r) if r else None)
     if name == "fit":
-        f = fit(a[0], [tuple(x) for x in a[1]])
+        f = fit(a[0], [tuple(x) for x in a[1]], a[2] if len(a) > 2 else None)
         return json.dumps(vars(f) if f else None)
     if name == "p_over":
         return json.dumps(p_over(Fit(**a[0]), a[1]))
@@ -310,7 +333,7 @@ const py = (name, args) => {
 };
 const PY_ENGINE = {
   rowCalc: (m, r) => { const v = numRow(r); return v ? py("row_calc", [m.key, ...v]) : null; },
-  fit: (m, rows) => { const v = rows.map(numRow).filter(Boolean); return v.length ? py("fit", [m.key, v]) : null; },
+  fit: (m, rows) => { const v = rows.map(numRow).filter(Boolean); return v.length ? py("fit", [m.key, v, m.sigma0]) : null; },
   pOver: (f, k) => py("p_over", [f, k]),
   scoreModel: F => py("score_model", [F]),
   gridCells: M => py("grid_cells", [M]),
@@ -387,7 +410,7 @@ r_bridge <- function(reqs) {
     name <- q[[1]]; a <- q[[2]]
     switch(name,
       row_calc = row_calc(a[[1]], a[[2]], a[[3]], a[[4]]),
-      fit = fit_market(a[[1]], do.call(rbind, lapply(a[[2]], unlist))),
+      fit = fit_market(a[[1]], do.call(rbind, lapply(a[[2]], unlist)), if (length(a) > 2) a[[3]] else NULL),
       p_over = p_over(a[[1]], a[[2]]),
       score_model = score_model(a[[1]]),
       grid_cells = unname(as.matrix(grid_cells(a[[1]]))),
@@ -449,7 +472,7 @@ async function rSettled() {
 }
 const R_ENGINE = {
   rowCalc: (m, r) => { const v = numRow(r); return v ? rReq("row_calc", [m.key, ...v], () => JS_ENGINE.rowCalc(m, r)) : null; },
-  fit: (m, rows) => { const v = rows.map(numRow).filter(Boolean); return v.length ? rReq("fit", [m.key, v], () => JS_ENGINE.fit(m, rows)) : null; },
+  fit: (m, rows) => { const v = rows.map(numRow).filter(Boolean); return v.length ? rReq("fit", [m.key, v, m.sigma0], () => JS_ENGINE.fit(m, rows)) : null; },
   pOver: (f, k) => rReq("p_over", [f, k], () => JS_ENGINE.pOver(f, k)),
   scoreModel: F => rReq("score_model", [F], () => JS_ENGINE.scoreModel(F)),
   gridCells: M => rReq("grid_cells", [M], () => JS_ENGINE.gridCells(M)),
@@ -490,7 +513,7 @@ async function setEngine(name) {
       E = JS_T; refreshAll();
       document.querySelectorAll("#engine button").forEach(b => b.setAttribute("aria-pressed", b.dataset.eng === "js"));
       st.className = "status err";
-      st.textContent = "R čia neveikia: jo failas per didelis Claude programai. R veikia GitHub Pages versijoje: pgrigas-trainys.github.io/event_probability";
+      st.textContent = "R čia neveikia: jo failas per didelis Claude programai. R veikia GitHub Pages versijoje: pgrigas-trainys.github.io/event_probability_quater";
       return;
     }
     st.className = "status"; st.textContent = "Kraunamas R (pirmą kartą ~30 MB)…";
@@ -517,22 +540,39 @@ async function setEngine(name) {
 function refreshAll() { MARKETS.forEach(m => updateComputed(m.key, true)); renderSummary(); }
 const SEED = {
   home: "Fenerbahce", away: "Partizan",
-  rows: {
+  period: "ft",
+  per: { ft: { conds: [], q: "", rows: {
     hcp: [[-14.5, 2.45, 1.50], [-13.5, 2.30, 1.62], [-12.5, 2.15, 1.70], [-11.5, 1.95, 1.85],
           [-10.5, 1.85, 1.95], [-9.5, 1.70, 2.15], [-8.5, 1.62, 2.30], [-7.5, 1.50, 2.45]]
       .map(([l, a, b]) => ({ l: String(l), a: a.toFixed(2), b: b.toFixed(2) })),
     tot: [], home: [], away: [],
-  },
+  } } },
 };
 
 // ---------- state ----------
 let state;
 try { state = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
-if (!state || !state.rows) state = JSON.parse(JSON.stringify(SEED));
-for (const m of MARKETS) state.rows[m.key] ||= [];
-const images = Object.fromEntries(MARKETS.map(m => [m.key, []])); // {file, url}
+// Pirmą kartą perimami duomenys iš ankstesnės versijos (event_probability) kaip pilno laiko duomenys.
+if (!state) try { state = JSON.parse(localStorage.getItem(OLD_KEY)); } catch (e) {}
+if (!state || !(state.per || state.rows)) state = JSON.parse(JSON.stringify(SEED));
+if (!state.per) { state.per = { ft: { rows: state.rows || {}, conds: state.conds || [], q: state.q || "" } }; }
+delete state.rows; delete state.conds; delete state.q;
+for (const p of PERIODS) {
+  const d = state.per[p.key] ||= {};
+  d.rows ||= {}; d.conds ||= []; d.q ||= "";
+  for (const m of MARKETS) d.rows[m.key] ||= [];
+}
+if (!PERIODS.some(p => p.key === state.period)) state.period = "ft";
+// state.rows, state.conds ir state.q visada rodo į pasirinkto kėlinio duomenis.
+for (const f of ["rows", "conds", "q"])
+  Object.defineProperty(state, f, { get: () => state.per[state.period][f], set: v => { state.per[state.period][f] = v; }, enumerable: false });
+const imagesBy = Object.fromEntries(PERIODS.map(p => [p.key, Object.fromEntries(MARKETS.map(m => [m.key, []]))])); // {file, url}
+let images = imagesBy[state.period];
 let active = "hcp";
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const save = () => {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  if (document.getElementById("period")?.childElementCount) renderPeriods();
+};
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -617,14 +657,20 @@ function calcOut(key) {
 function renderSummary() {
   const F = Object.fromEntries(MARKETS.map(m => [m.key, E.fit(m, state.rows[m.key])]));
   const cards = [];
-  if (F.hcp) {
+  const SM = E.scoreModel(F);
+  if (!isFT() && SM) {
+    // Kėlinys gali baigtis lygiosiomis, todėl pergalės ir lygiųjų tikimybės imamos iš rezultatų tinklelio.
+    const ph = E.conditionProbability(SM, [{ v: "diff", op: ">", x: 0 }]), pd = E.conditionProbability(SM, [{ v: "diff", op: "=", x: 0 }]), pa = Math.max(0, 1 - ph - pd);
+    cards.push(`<div class="kpi lead"><small>${esc(homeN())} laimės kėlinį</small><b class="num">${pct(ph)}</b>
+      <span>${esc(awayN())}: ${pct(pa)} · lygiosios: ${pct(pd)}</span><div class="bar2"><i class="h" style="width:${ph * 100}%"></i><i class="d" style="width:${pd * 100}%"></i><i class="a" style="width:${pa * 100}%"></i></div></div>`);
+    if (F.hcp) cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(F.hcp.mu)}</b><span>${esc(homeN())} naudai · σ ${F.hcp.sigma.toFixed(1)}</span></div>`);
+  } else if (F.hcp) {
     const pw = E.pOver(F.hcp, 0);
     cards.push(`<div class="kpi lead"><small>Laimės ${esc(homeN())}</small><b class="num">${pct(pw)}</b>
       <span>${esc(awayN())}: ${pct(1 - pw)}</span><div class="bar2"><i class="h" style="width:${pw * 100}%"></i><i class="a" style="width:${(1 - pw) * 100}%"></i></div></div>`);
     cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(F.hcp.mu)}</b><span>${esc(homeN())} naudai · σ ${F.hcp.sigma.toFixed(1)}</span></div>`);
   }
   if (F.tot) cards.push(`<div class="kpi"><small>Tikėtina taškų suma</small><b class="num">${F.tot.mu.toFixed(1)}</b><span>σ ${F.tot.sigma.toFixed(1)}</span></div>`);
-  const SM = E.scoreModel(F);
   if (SM) {
     cards.push(`<div class="kpi"><small>Tikėtinas rezultatas</small><b class="num">${SM.mh.toFixed(0)} : ${SM.ma.toFixed(0)}</b><span>σ ${SM.sh.toFixed(1)} / ${SM.sa.toFixed(1)} · iš: ${esc(SM.src)}</span></div>`);
     let why;
@@ -716,29 +762,34 @@ async function scan(key) {
   const m = MARKETS.find(x => x.key === key);
   if (!sample) return;
   if (!images[key].length) { status(key, "Pirmiausia įkelkite nuotrauką.", "err"); return; }
-  const btn = document.querySelector(`[data-scan="${key}"]`);
+  const btn = document.querySelector(`[data-scan="${key}"]`), P = per(), shots = images[key];
   btn.disabled = true; status(key, "Skaitoma… (gali užtrukti iki minutės)");
   const prompt = `These are screenshots from a sports betting website (Lithuanian, e.g. Betsson or Topsport) for a basketball game. They show ${m.what}
+Period: read ONLY the market for ${P.what}. Ignore lines for other periods (full game, halves or other quarters).
 Read every line visible in the images. Use decimal odds exactly as printed. Skip a line if one side's odds are not visible. Do not invent numbers. Remove duplicates.
 Also report the two team names: home = the team listed first, away = the team listed second (null if not visible).
 Reply with only JSON in this shape: {"home": "Fenerbahce", "away": "Partizan", "rows": [{"line": -11.5, "a": 1.95, "b": 1.85}]}`;
   try {
-    const res = await sample.json(prompt, { images: images[key].slice(0, maxImgs).map(x => x.file) });
+    const res = await sample.json(prompt, { images: shots.slice(0, maxImgs).map(x => x.file) });
     const rows = (res && Array.isArray(res.rows) ? res.rows : [])
       .map(r => ({ l: Number(r.line), a: Number(r.a), b: Number(r.b) }))
       .filter(r => isFinite(r.l) && r.a > 1 && r.b > 1)
       .sort((x, y) => x.l - y.l)
       .map(r => ({ l: String(r.l), a: r.a.toFixed(2), b: r.b.toFixed(2) }));
-    if (!rows.length) { status(key, "Nuotraukoje nerasta šios rinkos koeficientų.", "err"); return; }
-    state.rows[key] = rows;
+    const here = P.key === state.period; // kol skaitė, galėjo būti perjungtas kitas kėlinys
+    if (!rows.length) { if (here) status(key, `Nuotraukoje nerasta šios rinkos (${P.title}) koeficientų.`, "err"); return; }
+    state.per[P.key].rows[key] = rows;
     if (key === "hcp" || (!state.home && !state.away)) {
       if (res.home && typeof res.home === "string") { state.home = res.home; $("homeName").value = res.home; }
       if (res.away && typeof res.away === "string") { state.away = res.away; $("awayName").value = res.away; }
     }
-    save(); renderRows(key);
+    save(); renderPeriods();
+    if (!here) return;
+    renderRows(key);
     status(key, `Nuskaityta ${rows.length} eil. Patikrinkite skaičius.`, "ok");
-    if (images[key].length > maxImgs) status(key, `Nuskaitytos pirmos ${maxImgs} nuotraukos iš ${images[key].length}.`, "ok");
+    if (shots.length > maxImgs) status(key, `Nuskaitytos pirmos ${maxImgs} nuotraukos iš ${shots.length}.`, "ok");
   } catch (e) {
+    if (P.key !== state.period) return;
     if (e && e.code === "cancelled") status(key, "");
     else status(key, ERR[e && e.code] || "Nepavyko nuskaityti. Bandykite dar kartą.", "err");
     if (e && (e.code === "not_granted" || e.code === "sampling_disabled")) disableScan(ERR[e.code]);
@@ -792,7 +843,7 @@ function renderCS(F) {
   $("csBoard").innerHTML = `<table class="heat${step === 1 ? " fine" : ""}"><thead><tr><th class="corner"><b>${esc(homeN())}</b> ↓<br><i>${esc(awayN())}</i> →</th>${hdr}</tr></thead><tbody>${body}</tbody></table>`;
   centerTop();
   $("csInfo").innerHTML = `${esc(homeN())} <b>${mh.toFixed(1)}</b> · ${esc(awayN())} <b>${ma.toFixed(1)}</b> · ρ <b>${rho.toFixed(3)}</b> · ${M.src}`;
-  const top = cells.filter(c => c[0] !== c[1]).sort((x, y) => y[2] - x[2]).slice(0, 10);
+  const top = cells.filter(c => !isFT() || c[0] !== c[1]).sort((x, y) => y[2] - x[2]).slice(0, 10);
   $("csTop").innerHTML = top.map(([h, a, p], i) =>
     `<div class="r"><span>${i + 1}</span><b><span class="h">${h}</span> : <span class="a">${a}</span></b><em>${(p * 100).toFixed(2)}%</em></div>`).join("");
 }
@@ -833,16 +884,18 @@ function renderQ(F) {
   $("qNote").textContent = `Tikėtinas rezultatas ${M.mh.toFixed(1)} : ${M.ma.toFixed(1)}, ρ ${M.rho.toFixed(3)}.` + (skipped ? ` ${skipped} neužpildytos sąlygos praleistos.` : "");
 }
 function renderExamples() {
-  const ex = [`abi komandos įmes daugiau nei 75 taškų ir laimės ${awayN()}`, `${homeN()} laimės daugiau nei 10 taškų`, `bendra suma mažiau nei 160 ir laimės ${homeN()}`];
+  const [pts, by, sum] = per().ex, w = isFT() ? "laimės" : "laimės kėlinį";
+  const ex = [`abi komandos įmes daugiau nei ${pts} taškų ir ${w} ${awayN()}`, `${homeN()} ${w} daugiau nei ${by} taškų`, `bendra suma mažiau nei ${sum} ir ${w} ${homeN()}`];
+  $("qText").placeholder = "pvz.: " + ex[0];
   $("qEx").innerHTML = textSample ? ex.map(t => `<button type="button" data-ex="${esc(t)}">${esc(t)}</button>`).join("") : "";
 }
 async function parseQuery(text) {
   if (!textSample) return;
   qCtl?.abort(); qCtl = new AbortController();
   $("qGo").disabled = true; $("qStatus").className = "status"; $("qStatus").textContent = "Claude verčia sąlygą…";
-  const prompt = `Convert a Lithuanian (or English) basketball betting question into a list of conditions on the final score. All conditions are combined with AND.
+  const prompt = `Convert a Lithuanian (or English) basketball betting question into a list of conditions on the score of ${per().what}. All conditions are combined with AND.
 Home team: "${homeN()}". Away team: "${awayN()}".
-Variables: "home" = home team points, "away" = away team points, "total" = home + away, "diff" = home − away.
+Variables (all counted for that period only): "home" = home team points, "away" = away team points, "total" = home + away, "diff" = home − away.
 Operators: ">", ">=", "<", "<=", "=". "x" is a number.
 Rules: "daugiau nei N" / "more than N" -> ">" N; "bent N" / "at least N" / "N ir daugiau" -> ">=" N; "mažiau nei N" -> "<" N; "ne daugiau nei N" -> "<=" N.
 "abi komandos" (both teams) -> one condition for home AND one for away. "<team> laimės" (wins) -> diff ">" 0 for home, diff "<" 0 for away.
@@ -851,7 +904,9 @@ If the question needs OR, or cannot be expressed this way, return an empty list 
 Reply with only JSON: {"conditions": [{"v": "home", "op": ">", "x": 75}], "problem": null}
 Question: ${text}`;
   try {
+    const pk = state.period;
     const res = await textSample.json(prompt, { modelTier: "quick", signal: qCtl.signal });
+    if (pk !== state.period) return;
     const list = (Array.isArray(res?.conditions) ? res.conditions : [])
       .filter(c => VARS.some(v => v[0] === c.v) && OPS[c.op] && isFinite(Number(c.x)))
       .map(c => ({ v: c.v, op: c.op, x: String(Number(c.x)) }));
@@ -892,8 +947,36 @@ $("tab-cs").addEventListener("click", () => setTab("cs"));
 $("tab-q").addEventListener("click", () => setTab("q"));
 $("csStep").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; state.csStep = +b.dataset.step; save(); renderSummary(); });
 
+// ---------- kėliniai ----------
+const NOTES = { cs: $("csNote").textContent, q: $("qNoteText").textContent, odds: $("oddsNote").textContent };
+const hasData = k => MARKETS.some(m => state.per[k].rows[m.key].length) || state.per[k].conds.length;
+function renderPeriods() {
+  $("period").innerHTML = PERIODS.map(p => `<button type="button" data-p="${p.key}" aria-pressed="${p.key === state.period}"${hasData(p.key) ? ' class="has" title="Yra įvestų duomenų"' : ""}>${p.title}</button>`).join("");
+}
+function renderNotes() {
+  const p = per();
+  if (isFT()) { $("csNote").textContent = NOTES.cs; $("qNoteText").textContent = NOTES.q; $("oddsNote").textContent = NOTES.odds; return; }
+  $("csNote").textContent = `Rodomas tik ${p.gen} rezultatas, skaičiuojamas taip pat kaip pilnam laikui: iš šio kėlinio handikapo, sumos ir komandų taškų rinkų. Kėlinys gali baigtis lygiosiomis, todėl lygūs rezultatai rodomi ir sąraše.`;
+  $("qNoteText").textContent = `Sąlygos taikomos tik ${p.gen} taškams. Visos sąlygos turi išsipildyti kartu. Kėlinyje lygiosios galimos ir nelaikomos nė vienos komandos pergale.`;
+  $("oddsNote").textContent = `Įveskite ${p.gen} rinkų koeficientus. ${NOTES.odds} Kai rinkoje tik viena linija, numatyta σ perpus mažesnė nei pilnam laikui.`;
+}
+// Perjungus kėlinį perpiešiama viskas: koeficientų lentelės, nuotraukos, sąlygos ir santrauka.
+function setPeriod(k) {
+  if (!PERIODS.some(p => p.key === k)) return;
+  qCtl?.abort();
+  state.period = k; save();
+  images = imagesBy[k];
+  MARKETS.forEach(m => { renderRows(m.key); renderThumbs(m.key); status(m.key, ""); $("calc-" + m.key).value = ""; calcOut(m.key); });
+  $("qText").value = state.q || ""; $("qStatus").textContent = "";
+  renderConds(); renderExamples(); renderNotes(); renderPeriods(); renderSummary();
+  setActive("hcp");
+  if (state.tab === "cs") centerTop();
+}
+$("period").addEventListener("click", e => { const b = e.target.closest("[data-p]"); if (b) setPeriod(b.dataset.p); });
+
 // ---------- events ----------
 $("markets").innerHTML = MARKETS.map(panelHTML).join("");
+renderPeriods(); renderNotes(); renderExamples();
 $("homeName").value = state.home || ""; $("awayName").value = state.away || "";
 MARKETS.forEach(m => { renderRows(m.key); renderThumbs(m.key); });
 setTab(["cs", "q"].includes(state.tab) ? state.tab : "odds");
@@ -952,11 +1035,14 @@ $("scanAll").addEventListener("click", async () => {
   await Promise.all(keys.map(scan));
   $("scanAll").disabled = false;
 });
+// Naujos rungtynės: išvalomi visų kėlinių koeficientai ir nuotraukos (sąlygos paliekamos, kaip ir anksčiau).
 $("resetAll").addEventListener("click", () => {
-  MARKETS.forEach(m => { state.rows[m.key] = []; images[m.key].forEach(x => URL.revokeObjectURL(x.url)); images[m.key] = [];
-    renderRows(m.key); renderThumbs(m.key); status(m.key, ""); $("calc-" + m.key).value = ""; calcOut(m.key); });
+  for (const p of PERIODS) {
+    state.per[p.key].rows = Object.fromEntries(MARKETS.map(m => [m.key, []]));
+    for (const m of MARKETS) { imagesBy[p.key][m.key].forEach(x => URL.revokeObjectURL(x.url)); imagesBy[p.key][m.key] = []; }
+  }
   state.home = ""; state.away = ""; $("homeName").value = ""; $("awayName").value = "";
-  save(); updateComputed("hcp"); setActive("hcp");
+  setPeriod(state.period);
 });
 
 // Light up screenshot reading when Claude is available.

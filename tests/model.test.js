@@ -94,4 +94,17 @@ assert.equal(combo.byMarket.hcp.length, 1); assert.equal(combo.byMarket.tot.leng
 assert.equal(combo.byMarket.home.length, 1); assert.equal(combo.byMarket.away.length, 1);
 assert.equal(combo.count, 4, "eilutės be skaičių praleidžiamos");
 
+assert.equal(M.scoreModel({ hcp: null, tot: null, home: null, away: null }), null, "be rinkų modelio nėra");
+
+// Kėlinys: viena linija -> naudojama to kėlinio numatyta σ (perpus mažesnė), tinklelyje galimos lygiosios.
+const Q = M.fit({ key: "hcp", sigma0: 6 }, rows([[-2.5, 1.90, 1.90]]));
+assert.equal(Q.sigma, 6); assert.ok(Q.assumed);
+near(Q.mu, 2.5, 1e-9, "kėlinio vidurkis");
+const QSM = M.scoreModel({ hcp: M.fit({ key: "hcp", sigma0: 6 }, rows([[-3.5, 2.0, 1.8], [-1.5, 1.6, 2.3]])),
+  tot: M.fit({ key: "tot", sigma0: 8 }, rows([[40.5, 1.8, 2.0], [42.5, 2.0, 1.8]])), home: null, away: null });
+const pd = M.conditionProbability(QSM, [{ v: "diff", op: "=", x: 0 }]);
+const ph = M.conditionProbability(QSM, [{ v: "diff", op: ">", x: 0 }]), pa = M.conditionProbability(QSM, [{ v: "diff", op: "<", x: 0 }]);
+assert.ok(pd > 0.03 && pd < 0.15, `kėlinio lygiosios ${pd}`);
+near(ph + pd + pa, 1, 1e-9, "pergalė + lygiosios + pralaimėjimas");
+
 console.log("Visi skaičiavimų testai praėjo.");

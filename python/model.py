@@ -59,8 +59,9 @@ class Fit:
     assumed: bool   # True, kai σ neįvertinta (viena linija) ir paimta numatyta
 
 
-def fit(market: str, rows: list[tuple[float, float, float]]) -> Fit | None:
-    """P(X > k) = 1 − Φ((k − μ)/σ): z = Φ⁻¹(1 − p) tiesiškai priklauso nuo k, nuolydis = 1/σ."""
+def fit(market: str, rows: list[tuple[float, float, float]], sigma0: float | None = None) -> Fit | None:
+    """P(X > k) = 1 − Φ((k − μ)/σ): z = Φ⁻¹(1 − p) tiesiškai priklauso nuo k, nuolydis = 1/σ.
+    sigma0: numatyta σ, kai linija tik viena (kėliniams mažesnė nei pilnam laikui)."""
     calc = [c for c in (row_calc(market, *r) for r in rows) if c]
     if not calc:
         return None
@@ -75,7 +76,7 @@ def fit(market: str, rows: list[tuple[float, float, float]]) -> Fit | None:
             if slope > 0.01:
                 sigma = 1 / slope
                 return Fit(mu=mk - mz * sigma, sigma=sigma, n=n, assumed=False)
-    sigma = SIGMA0[market]
+    sigma = sigma0 if sigma0 else SIGMA0[market]
     mu = sum(k - z * sigma for k, z in pts) / len(pts)
     return Fit(mu=mu, sigma=sigma, n=len(pts), assumed=True)
 
