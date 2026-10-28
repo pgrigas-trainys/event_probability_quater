@@ -93,13 +93,19 @@ table { width: 100%; border-collapse: collapse; }
 th { text-align: right; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
 td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
-td input { width: 7.5ch; font-family: var(--f-mono); font-size: .85rem; text-align: right; padding: 3px 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg); }
+td input { width: 6.5ch; font-family: var(--f-mono); font-size: .85rem; text-align: right; padding: 3px 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg); }
 td input:hover { border-color: var(--line); }
 td input:focus { border-color: var(--accent); background: var(--sunk); outline: none; }
 td.p { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: .85rem; }
 td.pa { color: var(--home); } td.pb { color: var(--away); }
 .tot td.pa, .tot td.pb { color: var(--fg); }
 td.m { color: var(--muted); font-family: var(--f-mono); font-size: .75rem; }
+th.mod, td.mod { border-left: 1px solid var(--line); }
+td.mp span { color: var(--muted); font-size: .74rem; margin-left: 2px; }
+td.mp, td.md { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--muted); }
+td.mp { color: var(--fg); }
+td.md.val { color: var(--ok); font-weight: 500; }
+td.md.big { color: var(--warn); }
 td .x { border: 0; background: transparent; color: var(--muted); padding: 0 4px; }
 td .x:hover { color: var(--bad); }
 .empty td { text-align: left; color: var(--muted); font-size: .8rem; padding: 8px 6px; }
@@ -277,6 +283,7 @@ input[type=file] { display: none; }
 
   <div class="markets" id="markets"></div>
 
+  <p class="note">Stulpeliai „Modelis“ (tikimybė ir teisingas koeficientas be maržos) ir „Δ“ rodo, kaip tas pačias duotas linijas vertina bendras modelis (visos rinkos kartu, kėliniui – ir pilnas laikas). Δ – modelio tikimybė minus bukmekerio tikimybė be maržos pirmai pusei, procentiniais punktais. <span style="color:var(--ok)">Žalia</span> – modelio teisingas koeficientas mažesnis už bukmekerio vienai iš pusių (užvedus pelę matyti laukiama grąža), <span style="color:var(--warn)">geltona</span> – |Δ| ≥ 3 p.p.</p>
   <p class="note" id="oddsNote">Tikimybės be bukmekerio maržos. Vidurkis ir σ (standartinis nuokrypis) įvertinti pritaikius normalųjį skirstinį visoms tos rinkos linijoms. Skaičius lentelėje galima taisyti ranka.</p>
   </div>
 </div>
@@ -309,7 +316,7 @@ MARKETS.forEach(m => { const base = m.base = m.sigma0; Object.defineProperty(m, 
 const KEY = "event-probability-quater-v1", OLD_KEY = "event-probability-v1";
 
 // ---------- skaičiavimo variklis: JavaScript (model.js) arba Python (model.py per Brython) ----------
-const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, periodShareModel, fitKappa };
+const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, periodShareModel, fitKappa, modelPOver: periodPOver };
 let E = JS_ENGINE; // keičiama į laiką matuojančią versiją setEngine()
 const BRYTHON = "https://cdn.jsdelivr.net/npm/brython@3.14.3/";
 const PY_BRIDGE = `
@@ -339,6 +346,8 @@ def _bridge(name, args_json):
     if name == "period_share_model":
         r = period_share_model(_sm(a[0]), [tuple(x) for x in a[1]], a[2] if len(a) > 2 else None)
         return json.dumps({**vars(r[0]), "share": r[1]} if r else None)
+    if name == "model_p_over":
+        return json.dumps(period_p_over(_sm(a[0]), a[1], a[2]))
     if name == "fit_kappa":
         return json.dumps(fit_kappa(_sm(a[0]), [[tuple(x) for x in g] for g in a[1]]))
     raise ValueError(name)
@@ -361,6 +370,7 @@ const PY_ENGINE = {
   conditionProbability: (M, conds) => py("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])]),
   periodShareModel: (M, pts, kappa) => M ? py("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa]) : null,
   fitKappa: (M, groups) => M ? py("fit_kappa", [M, groups.map(g => g.map(q => [q.key, q.k, q.p]))]) : null,
+  modelPOver: (M, key, k) => py("model_p_over", [M, key, k]),
 };
 const loadScript = src => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error(src)); document.head.append(s); });
 let pyReady = null, pyKind = "";
@@ -441,6 +451,7 @@ r_bridge <- function(reqs) {
         lapply(a[[2]], function(c) list(v = c[[1]], op = c[[2]], x = c[[3]]))),
       period_share_model = period_share_model(a[[1]], a[[2]], if (length(a) > 2) a[[3]] else NULL),
       fit_kappa = fit_kappa(a[[1]], a[[2]]),
+      model_p_over = period_p_over(a[[1]], a[[2]], a[[3]]),
       stop("nezinoma funkcija ", name))
   })
   .to_json(out)
@@ -504,6 +515,7 @@ const R_ENGINE = {
   conditionProbability: (M, conds) => rReq("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])], () => JS_ENGINE.conditionProbability(M, conds)),
   periodShareModel: (M, pts, kappa) => M ? rReq("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa], () => JS_ENGINE.periodShareModel(M, pts, kappa)) : null,
   fitKappa: (M, groups) => M ? rReq("fit_kappa", [M, groups.map(g => g.map(q => [q.key, q.k, q.p]))], () => JS_ENGINE.fitKappa(M, groups)) : null,
+  modelPOver: (M, key, k) => rReq("model_p_over", [M, key, k], () => JS_ENGINE.modelPOver(M, key, k)),
 };
 
 // Matuojamas laikas atskirai: kiek užtrunka patys skaičiavimai (model.js / model.py), o kiek puslapio piešimas.
@@ -624,7 +636,7 @@ function panelHTML(m) {
       <span class="status" id="st-${m.key}"></span>
     </div>
     <div class="tw"><table class="${m.key === "hcp" ? "" : "tot"}">
-      <thead><tr><th>${m.line}</th><th id="ha-${m.key}">${m.a}</th><th id="hb-${m.key}">${m.b}</th><th>P ${m.key === "hcp" ? "namai" : "daugiau"}</th><th>P ${m.key === "hcp" ? "svečiai" : "mažiau"}</th><th>Marža</th><th></th></tr></thead>
+      <thead><tr><th>${m.line}</th><th id="ha-${m.key}">${m.a}</th><th id="hb-${m.key}">${m.b}</th><th>P ${m.key === "hcp" ? "namai" : "daugiau"}</th><th>P ${m.key === "hcp" ? "svečiai" : "mažiau"}</th><th>Marža</th><th class="mod" title="Modelio tikimybė pirmai pusei (${m.key === "hcp" ? "namai" : "daugiau"}) ir teisingas jos koeficientas be maržos">Modelis</th><th title="Modelio tikimybė − bukmekerio tikimybė be maržos, procentiniais punktais (pirmai pusei)">Δ p.p.</th><th></th></tr></thead>
       <tbody id="rows-${m.key}"></tbody>
     </table></div>
     <div class="calc"><label for="calc-${m.key}">${m.key === "hcp" ? "Namų hcp" : "Linija"}</label>
@@ -640,9 +652,9 @@ function renderRows(key) {
       <td><input inputmode="decimal" data-f="l" value="${esc(r.l)}" aria-label="${m.line}"></td>
       <td><input inputmode="decimal" data-f="a" value="${esc(r.a)}" aria-label="${m.a} koeficientas"></td>
       <td><input inputmode="decimal" data-f="b" value="${esc(r.b)}" aria-label="${m.b} koeficientas"></td>
-      <td class="p pa"></td><td class="p pb"></td><td class="m"></td>
+      <td class="p pa"></td><td class="p pb"></td><td class="m"></td><td class="mp mod"></td><td class="md"></td>
       <td><button class="x" type="button" data-del="${i}" aria-label="Pašalinti eilutę">×</button></td></tr>`).join("")
-    : `<tr class="empty"><td colspan="7">Dar nėra koeficientų. Įkelkite nuotrauką ir spauskite „Nuskaityti“ arba pridėkite eilutę ranka.</td></tr>`;
+    : `<tr class="empty"><td colspan="9">Dar nėra koeficientų. Įkelkite nuotrauką ir spauskite „Nuskaityti“ arba pridėkite eilutę ranka.</td></tr>`;
   updateComputed(key);
 }
 
@@ -693,12 +705,44 @@ function periodPoints(pk = state.period) {
   for (const m of MARKETS) for (const r of state.per[pk].rows[m.key]) { const c = E.rowCalc(m, r); if (c) pts.push({ key: m.key, k: c.k, p: c.pa }); }
   return pts;
 }
+let modelMemo = { key: null, val: null };
 function modelFor(F) {
+  if (E !== R_T) {
+    const key = JSON.stringify([E === PY_T, state.period, isFT() ? 0 : state.per.ft.rows, state.rows, kappaVal()]);
+    if (modelMemo.key !== key) modelMemo = { key, val: modelForRaw(F) };
+    return modelMemo.val;
+  }
+  return modelForRaw(F);
+}
+function modelForRaw(F) {
   if (isFT()) return E.scoreModel(F);
   const MF = ftModel();
   return MF ? E.periodShareModel(MF, periodPoints(), kappaVal()) : E.scoreModel(F);
 }
 const pct1 = p => (p * 100).toFixed(1) + "%";
+// Modelio stulpeliai kiekvienoje bukmekerio eilutėje: tik duotoms linijoms (be ekstrapoliacijos).
+// P modelyje = P(X > k), X pagal rinką (handikapas H − A, suma H + A, namų H, svečių A), k – kaip rowCalc.
+function renderModelCols(SM) {
+  for (const m of MARKETS) {
+    $("rows-" + m.key).querySelectorAll("tr[data-i]").forEach(tr => {
+      const r = state.rows[m.key][+tr.dataset.i]; // perjungiant kėlinį lentelė gali būti dar neperpiešta
+      const c = r ? E.rowCalc(m, r) : null;
+      const [mp, md] = tr.querySelectorAll("td.mp, td.md");
+      md.className = "md"; md.title = ""; mp.title = "";
+      if (!c || !SM) { mp.textContent = "–"; md.textContent = ""; return; }
+      const p = E.modelPOver(SM, m.key, c.k), d = (p - c.pa) * 100;
+      const oa = parseFloat(String(r.a).replace(",", ".")), ob = parseFloat(String(r.b).replace(",", "."));
+      const evA = p * oa - 1, evB = (1 - p) * ob - 1;
+      const sides = m.key === "hcp" ? [homeN(), awayN()] : ["Daugiau", "Mažiau"];
+      mp.innerHTML = p > 0 && p < 1 ? `${pct1(p)} <span>${(1 / p).toFixed(2)}</span>` : pct1(p);
+      mp.title = p > 0 && p < 1 ? `Teisingi koeficientai be maržos: ${sides[0]} ${(1 / p).toFixed(2)}, ${sides[1]} ${(1 / (1 - p)).toFixed(2)}` : "";
+      const ds = Math.abs(d) < 0.05 ? "0.0" : (d > 0 ? "+" : "") + d.toFixed(1);
+      md.textContent = ds;
+      if (evA > 0 || evB > 0) md.classList.add("val"); else if (Math.abs(d) >= 3) md.classList.add("big");
+      md.title = `Laukiama grąža pagal modelį: ${sides[0]} ${(evA * 100).toFixed(1)} %, ${sides[1]} ${(evB * 100).toFixed(1)} %`;
+    });
+  }
+}
 // Tempo koreliacija κ tarp namų ir svečių kėlinio dalių: keičiama ranka, numatyta 0.3.
 const kappaVal = () => { const v = parseFloat(String(state.kappa ?? "").replace(",", ".")); return isFinite(v) ? Math.max(-1, Math.min(1, v)) : PERIOD_KAPPA0; };
 
@@ -739,6 +783,7 @@ function renderSummary() {
   }
   renderCS(F, SM);
   renderQ(F, SM);
+  renderModelCols(SM);
   if (!isFT()) renderKappa(); // mygtukas „Įvertinti“ priklauso nuo įvestų kėlinio linijų
   $("summary").innerHTML = cards.join("") || `<div class="kpi"><small>Santrauka</small><b>–</b><span>Įkelkite bent vienos rinkos koeficientus.</span></div>`;
 }
