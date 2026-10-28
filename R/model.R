@@ -129,19 +129,23 @@ condition_probability <- function(M, conds) {
 # Komandos kėlinio taškai = jos visų rungtynių taškų dalis: Qh = Sh·H, Qa = Sa·A, S ~ Beta(c·m, c·(1−m)),
 # dalys nepriklausomos nuo H, A ir viena nuo kitos (kaip žaidėjų dalys komandos taškuose).
 # E Qh = m·μh, Var Qh = (v + m²)(σh² + μh²) − m²μh² (v = m(1−m)/(c+1)), Cov(Qh, Qa) = mh·ma·ρ·σh·σa.
-# mh, ma ir c parenkami pagal kėlinio linijas (probit paklaida); silpna prielaida m = 25 %, c = 50.
+# Tempo dalis: Corr(Sh, Sa) = κ, tada Cov(Qh, Qa) = mh·ma·ρ·σh·σa + κ·sd(Sh)·sd(Sa)·(ρ·σh·σa + μh·μa).
+# κ nustatoma ranka (numatyta 0.3). mh, ma ir c parenkami pagal kėlinio linijas (probit paklaida);
+# silpna prielaida m = 25 %, c = 50.
+PERIOD_KAPPA0 <- 0.3
 PERIOD_SHARE0 <- 0.25
 PERIOD_C0 <- 50
 PERIOD_PRIOR_W <- 1e-3
 SHARE_X <- list(hcp = c(1, -1), tot = c(1, 1), home = c(1, 0), away = c(0, 1))
 
-share_moments <- function(M, mh, ma, c) {
+share_moments <- function(M, mh, ma, c, kappa = 0) {
   rho <- max(-0.95, min(0.95, M$rho))
+  kp <- max(-1, min(1, kappa))
   vh <- mh * (1 - mh) / (c + 1); va <- ma * (1 - ma) / (c + 1)
   sh <- sqrt((vh + mh^2) * (M$sh^2 + M$mh^2) - (mh * M$mh)^2)
   sa <- sqrt((va + ma^2) * (M$sa^2 + M$ma^2) - (ma * M$ma)^2)
-  list(mh = mh * M$mh, ma = ma * M$ma, sh = sh, sa = sa,
-       rho = max(-0.95, min(0.95, mh * ma * rho * M$sh * M$sa / (sh * sa))))
+  cv <- mh * ma * rho * M$sh * M$sa + kp * sqrt(vh * va) * (rho * M$sh * M$sa + M$mh * M$ma)
+  list(mh = mh * M$mh, ma = ma * M$ma, sh = sh, sa = sa, rho = max(-0.95, min(0.95, cv / (sh * sa))))
 }
 
 period_p_over <- function(Q, key, k) {
@@ -180,11 +184,12 @@ nelder_mead <- function(f, x0, step, iters = 600) {
 }
 
 # M = pilno laiko score_model(); pts = sąrašas list(key, k, p) iš kėlinio koeficientų.
-period_share_model <- function(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+period_share_model <- function(M, pts, kappa = PERIOD_KAPPA0, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   if (is.null(M)) return(NULL)
+  kappa <- if (is.null(kappa) || !is.finite(kappa)) PERIOD_KAPPA0 else max(-1, min(1, kappa))
   P <- Filter(function(q) !is.null(SHARE_X[[q[[1]]]]) && is.finite(q[[2]]) && q[[3]] > 0 && q[[3]] < 1, pts)
   l0 <- log(share0); lc <- log(c0)
-  at <- function(u) share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]))
+  at <- function(u) share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]), kappa)
   err <- function(Q) sum(vapply(P, function(q) (.probit(period_p_over(Q, q[[1]], q[[2]])) - .probit(q[[3]]))^2, 0))
   obj <- function(u) {
     if (u[1] < log(0.02) || u[1] > log(0.9) || u[2] < log(0.02) || u[2] > log(0.9) || u[3] < log(2) || u[3] > log(5000)) return(1e9)
@@ -193,7 +198,7 @@ period_share_model <- function(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   u <- if (length(P)) nelder_mead(obj, c(l0, l0, lc), c(0.2, 0.2, 0.5))$x else c(l0, l0, lc)
   Q <- at(u)
   c(Q, list(rho_tot = NULL, rho_hcp = NULL, src = "pilnas laikas × kėlinio dalis",
-            share = list(h = exp(u[1]), a = exp(u[2]), c = exp(u[3]), n = length(P), sse = err(Q))))
+            share = list(h = exp(u[1]), a = exp(u[2]), c = exp(u[3]), kappa = kappa, n = length(P), sse = err(Q))))
 }
 
 parse_cond <- function(text) {

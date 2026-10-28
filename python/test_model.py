@@ -123,7 +123,7 @@ def test_quarter_sigma0():
 
 def test_period_share():
     FT = m.ScoreModel(mh=88, ma=78, sh=10, sa=10, rho=0.3, src="")
-    truth = m.share_moments(FT, 0.27, 0.23, 80)
+    truth = m.share_moments(FT, 0.27, 0.23, 80, 0.3)
     pts = [(key, k, m.period_p_over(truth, key, k)) for key, ks in
            [("hcp", [-3.5, -1.5, 0.5, 2.5]), ("tot", [38.5, 41.5, 44.5]), ("home", [21.5, 24.5]), ("away", [16.5, 18.5])] for k in ks]
     Q, s = m.period_share_model(FT, pts)
@@ -133,6 +133,8 @@ def test_period_share():
     Q0, s0 = m.period_share_model(FT, [])
     assert s0["h"] == 0.25 and Q0.mh == 22
     assert m.period_share_model(None, pts) is None
+    assert s0["kappa"] == 0.3
+    near(m.period_share_model(FT, [], kappa=0)[0].rho, 0.0625 * 30 / (Q0.sh * Q0.sa), 1e-9, "κ = 0")
     # Monte Carlo: dalys iš Beta, taškai iš dvimačio normaliojo -> momentai sutampa su formulėmis.
     if m.np is not None:
         rng = m.np.random.default_rng(1)
@@ -140,8 +142,10 @@ def test_period_share():
         z1, z2 = rng.standard_normal(n), rng.standard_normal(n)
         H = 88 + 10 * z1
         A = 78 + 10 * (0.3 * z1 + math.sqrt(1 - 0.09) * z2)
-        qh = rng.beta(80 * 0.27, 80 * 0.73, n) * H
-        qa = rng.beta(80 * 0.23, 80 * 0.77, n) * A
+        # Dalys su koreliacija κ = 0.3 (momentai kaip Beta: vidurkis m, dispersija m(1−m)/(c+1)).
+        u1, u2 = rng.standard_normal(n), rng.standard_normal(n)
+        qh = (0.27 + math.sqrt(0.27 * 0.73 / 81) * u1) * H
+        qa = (0.23 + math.sqrt(0.23 * 0.77 / 81) * (0.3 * u1 + math.sqrt(1 - 0.09) * u2)) * A
         near(float(qh.std()), truth.sh, 0.03, "MC kėlinio σ namų")
         near(float(qa.std()), truth.sa, 0.03, "MC kėlinio σ svečių")
         near(float(m.np.corrcoef(qh, qa)[0, 1]), truth.rho, 0.01, "MC kėlinio ρ")

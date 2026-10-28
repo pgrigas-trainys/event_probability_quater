@@ -70,7 +70,7 @@ cat(sprintf("Monte Carlo palyginimas: sąlyga %.2f%% (modelis) vs %.2f%% (Monte 
 
 # Kėlinio dalių modelis: iš žinomų dalių sugeneruotos kėlinio linijos -> dalys atkuriamos.
 FTm <- list(mh = 88, ma = 78, sh = 10, sa = 10, rho = 0.3)
-truth <- share_moments(FTm, 0.27, 0.23, 80)
+truth <- share_moments(FTm, 0.27, 0.23, 80, 0.3)
 pts <- list()
 for (mk in list(list("hcp", c(-3.5, -1.5, 0.5, 2.5)), list("tot", c(38.5, 41.5, 44.5)), list("home", c(21.5, 24.5)), list("away", c(16.5, 18.5))))
   for (k in mk[[2]]) pts[[length(pts) + 1]] <- list(mk[[1]], k, period_p_over(truth, mk[[1]], k))
@@ -80,5 +80,7 @@ near(Rq$share$a, 0.23, 1e-3, "svečių kėlinio dalis")
 near(Rq$share$c, 80, 2, "koncentracija c")
 D <- period_share_model(FTm, list())
 near(D$mh, 22, 1e-12, "numatyta kėlinio dalis")
+near(period_share_model(FTm, list(), kappa = 0)$rho, 0.0625 * 30 / (D$sh * D$sa), 1e-9, "κ = 0")
+near(D$rho, (0.0625 * 30 + 0.3 * 0.1875 / 51 * (30 + 88 * 78)) / (D$sh * D$sa), 1e-9, "κ formulė")
 
 cat("Visi R testai praėjo.\n")

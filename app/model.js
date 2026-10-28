@@ -130,16 +130,20 @@ function conditionProbability(M, conds) {
 // Iš to kėlinio taškų vidurkiai, σ ir koreliacija:
 //   E Qh = m·μh,   Var Qh = (v + m²)(σh² + μh²) − m²μh²,   Cov(Qh, Qa) = mh·ma·ρ·σh·σa
 // ir kėlinys skaičiuojamas tuo pačiu dvimačiu normaliuoju modeliu kaip pilnas laikas.
-// Dalys mh, ma ir c parenkamos, kad modelio tikimybės geriausiai atkurtų kėlinio linijas (probit paklaida, kaip žaidėjams).
-// Labai silpna prielaida (m = 25 %, c = 50) lemia tik tai, ko linijos neapibrėžia; be kėlinio linijų imama ji pati.
-const PERIOD_SHARE0 = 0.25, PERIOD_C0 = 50, PERIOD_PRIOR_W = 1e-3;
+// Tempo dalis: namų ir svečių dalys koreliuotos, Corr(Sh, Sa) = κ (greitame kėlinyje abi dalys kartu didesnės). Tada
+//   Cov(Qh, Qa) = mh·ma·ρ·σh·σa + κ·sd(Sh)·sd(Sa)·(ρ·σh·σa + μh·μa).   κ = 0 – dalys nepriklausomos.
+// κ nustatoma ranka (numatyta 0.3). Dalys mh, ma ir c parenkamos, kad modelio tikimybės geriausiai atkurtų kėlinio
+// linijas (probit paklaida, kaip žaidėjams). Labai silpna prielaida (m = 25 %, c = 50) lemia tik tai, ko linijos
+// neapibrėžia; be kėlinio linijų imama ji pati.
+const PERIOD_SHARE0 = 0.25, PERIOD_C0 = 50, PERIOD_PRIOR_W = 1e-3, PERIOD_KAPPA0 = 0.3;
 const SHARE_X = { hcp: [1, -1], tot: [1, 1], home: [1, 0], away: [0, 1] };
-function shareMoments(M, mh, ma, c) {
-  const rho = Math.max(-0.95, Math.min(0.95, M.rho));
+function shareMoments(M, mh, ma, c, kappa = 0) {
+  const rho = Math.max(-0.95, Math.min(0.95, M.rho)), k = Math.max(-1, Math.min(1, kappa));
   const vh = mh * (1 - mh) / (c + 1), va = ma * (1 - ma) / (c + 1);
   const sh = Math.sqrt((vh + mh * mh) * (M.sh ** 2 + M.mh ** 2) - (mh * M.mh) ** 2);
   const sa = Math.sqrt((va + ma * ma) * (M.sa ** 2 + M.ma ** 2) - (ma * M.ma) ** 2);
-  return { mh: mh * M.mh, ma: ma * M.ma, sh, sa, rho: Math.max(-0.95, Math.min(0.95, mh * ma * rho * M.sh * M.sa / (sh * sa))) };
+  const cov = mh * ma * rho * M.sh * M.sa + k * Math.sqrt(vh * va) * (rho * M.sh * M.sa + M.mh * M.ma);
+  return { mh: mh * M.mh, ma: ma * M.ma, sh, sa, rho: Math.max(-0.95, Math.min(0.95, cov / (sh * sa))) };
 }
 // P(X > k) kėlinio modelyje, X pagal rinką: handikapas H − A, suma H + A, namų H, svečių A.
 function periodPOver(Q, key, k) {
@@ -169,12 +173,14 @@ function nelderMead(f, x0, step, iters = 600) {
   S.sort((a, b) => a[1] - b[1]);
   return S[0];
 }
-// M = pilno laiko scoreModel(); pts = [{key: "hcp"|"tot"|"home"|"away", k, p}] (kėlinio rinkų P(X > k) be maržos).
-function periodShareModel(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+// M = pilno laiko scoreModel(); pts = [{key: "hcp"|"tot"|"home"|"away", k, p}] (kėlinio rinkų P(X > k) be maržos);
+// kappa = dalių (tempo) koreliacija κ.
+function periodShareModel(M, pts, kappa = PERIOD_KAPPA0, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   if (!M) return null;
+  kappa = Number.isFinite(Number(kappa)) ? Math.max(-1, Math.min(1, Number(kappa))) : PERIOD_KAPPA0;
   const P = (pts || []).filter(q => SHARE_X[q.key] && isFinite(q.k) && q.p > 0 && q.p < 1);
   const l0 = Math.log(share0), lc = Math.log(c0);
-  const at = u => shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]));
+  const at = u => shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]), kappa);
   const obj = u => {
     if (u[0] < Math.log(0.02) || u[0] > Math.log(0.9) || u[1] < Math.log(0.02) || u[1] > Math.log(0.9) || u[2] < Math.log(2) || u[2] > Math.log(5000)) return 1e9;
     const Q = at(u); let s = 0;
@@ -185,7 +191,7 @@ function periodShareModel(M, pts, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   let sse = 0; const Q = at(u);
   for (const q of P) sse += (probitC(periodPOver(Q, q.key, q.k)) - probitC(q.p)) ** 2;
   return { ...Q, rho_tot: null, rho_hcp: null, src: "pilnas laikas × kėlinio dalis",
-    share: { h: Math.exp(u[0]), a: Math.exp(u[1]), c: Math.exp(u[2]), n: P.length, sse } };
+    share: { h: Math.exp(u[0]), a: Math.exp(u[1]), c: Math.exp(u[2]), kappa, n: P.length, sse } };
 }
 
 // ---------- CSV įkėlimas ----------
@@ -229,5 +235,5 @@ function parseOddsCSV(text) {
 
 if (typeof module !== "undefined") {
   module.exports = { erf, Phi, PhiInv, rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, VARS, OPS, parseOddsCSV,
-    shareMoments, periodPOver, nelderMead, periodShareModel, PERIOD_SHARE0, PERIOD_C0 };
+    shareMoments, periodPOver, nelderMead, periodShareModel, PERIOD_SHARE0, PERIOD_C0, PERIOD_KAPPA0 };
 }

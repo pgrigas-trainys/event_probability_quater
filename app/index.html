@@ -175,6 +175,10 @@ input[type=file] { display: none; }
 .periods button[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--bg); }
 .periods button.has::after { content: ""; position: absolute; top: 5px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .bar2 .d { background: var(--muted); }
+.prow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.kbox { display: flex; align-items: center; gap: 8px; font-size: .82rem; color: var(--muted); }
+.kbox input { width: 6ch; font-family: var(--f-mono); padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); text-align: right; }
+.kbox input:focus { border-color: var(--accent); outline: none; }
 .engine-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
 .engine-bar .seg button { font-family: var(--f-body); font-size: .82rem; padding: 5px 12px; }
 </style>
@@ -199,7 +203,13 @@ input[type=file] { display: none; }
     <span class="status" id="engStatus"></span>
   </div>
 
-  <nav class="periods" id="period" role="group" aria-label="Kėlinys"></nav>
+  <div class="prow">
+    <nav class="periods" id="period" role="group" aria-label="Kėlinys"></nav>
+    <label class="kbox" id="kappaBox" title="Koreliacija tarp namų ir svečių kėlinio dalių: kai kėlinys greitas, abiejų komandų dalys kartu didesnės. 0 – dalys nepriklausomos, 1 – visiškai kartu.">
+      Tempo koreliacija κ <input id="kappa" inputmode="decimal" aria-label="Tempo koreliacija kappa">
+      <button class="btn small" type="button" id="kappaReset" title="Grąžinti numatytą reikšmę">Atstatyti 0.3</button>
+    </label>
+  </div>
 
   <nav class="tabs" role="tablist" aria-label="Rodinys">
     <button type="button" role="tab" id="tab-odds" aria-controls="view-odds" aria-selected="true">Koeficientai</button>
@@ -324,7 +334,7 @@ def _bridge(name, args_json):
     if name == "condition_probability":
         return json.dumps(condition_probability(_sm(a[0]), [tuple(c) for c in a[1]]))
     if name == "period_share_model":
-        r = period_share_model(_sm(a[0]), [tuple(x) for x in a[1]])
+        r = period_share_model(_sm(a[0]), [tuple(x) for x in a[1]], a[2] if len(a) > 2 else None)
         return json.dumps({**vars(r[0]), "share": r[1]} if r else None)
     raise ValueError(name)
 `;
@@ -344,7 +354,7 @@ const PY_ENGINE = {
   scoreModel: F => py("score_model", [F]),
   gridCells: M => py("grid_cells", [M]),
   conditionProbability: (M, conds) => py("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])]),
-  periodShareModel: (M, pts) => M ? py("period_share_model", [M, pts.map(q => [q.key, q.k, q.p])]) : null,
+  periodShareModel: (M, pts, kappa) => M ? py("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa]) : null,
 };
 const loadScript = src => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error(src)); document.head.append(s); });
 let pyReady = null, pyKind = "";
@@ -423,7 +433,7 @@ r_bridge <- function(reqs) {
       grid_cells = unname(as.matrix(grid_cells(a[[1]]))),
       condition_probability = condition_probability(a[[1]],
         lapply(a[[2]], function(c) list(v = c[[1]], op = c[[2]], x = c[[3]]))),
-      period_share_model = period_share_model(a[[1]], a[[2]]),
+      period_share_model = period_share_model(a[[1]], a[[2]], if (length(a) > 2) a[[3]] else NULL),
       stop("nezinoma funkcija ", name))
   })
   .to_json(out)
@@ -485,7 +495,7 @@ const R_ENGINE = {
   scoreModel: F => rReq("score_model", [F], () => JS_ENGINE.scoreModel(F)),
   gridCells: M => rReq("grid_cells", [M], () => JS_ENGINE.gridCells(M)),
   conditionProbability: (M, conds) => rReq("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])], () => JS_ENGINE.conditionProbability(M, conds)),
-  periodShareModel: (M, pts) => M ? rReq("period_share_model", [M, pts.map(q => [q.key, q.k, q.p])], () => JS_ENGINE.periodShareModel(M, pts)) : null,
+  periodShareModel: (M, pts, kappa) => M ? rReq("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa], () => JS_ENGINE.periodShareModel(M, pts, kappa)) : null,
 };
 
 // Matuojamas laikas atskirai: kiek užtrunka patys skaičiavimai (model.js / model.py), o kiek puslapio piešimas.
@@ -678,9 +688,11 @@ function periodPoints() {
 function modelFor(F) {
   if (isFT()) return E.scoreModel(F);
   const MF = ftModel();
-  return MF ? E.periodShareModel(MF, periodPoints()) : E.scoreModel(F);
+  return MF ? E.periodShareModel(MF, periodPoints(), kappaVal()) : E.scoreModel(F);
 }
 const pct1 = p => (p * 100).toFixed(1) + "%";
+// Tempo koreliacija κ tarp namų ir svečių kėlinio dalių: keičiama ranka, numatyta 0.3.
+const kappaVal = () => { const v = parseFloat(String(state.kappa ?? "").replace(",", ".")); return isFinite(v) ? Math.max(-1, Math.min(1, v)) : PERIOD_KAPPA0; };
 
 function renderSummary() {
   const F = Object.fromEntries(MARKETS.map(m => [m.key, E.fit(m, state.rows[m.key])]));
@@ -695,7 +707,7 @@ function renderSummary() {
     cards.push(`<div class="kpi"><small>Tikėtinas skirtumas</small><b class="num">${sgn(SM.mh - SM.ma)}</b><span>${esc(homeN())} naudai · σ ${dsd.toFixed(1)}</span></div>`);
     cards.push(`<div class="kpi"><small>Tikėtina kėlinio suma</small><b class="num">${(SM.mh + SM.ma).toFixed(1)}</b><span>σ ${tsd.toFixed(1)}</span></div>`);
     if (SM.share) { const S = SM.share;
-      cards.push(`<div class="kpi"><small>Kėlinio dalis visų taškų</small><b class="num">${(S.h * 100).toFixed(1)} / ${(S.a * 100).toFixed(1)}%</b><span>${esc(homeN())} / ${esc(awayN())} · c ${S.c.toFixed(0)} · ${S.n ? `pagal ${S.n} kėlinio lin.` : "numatyta, nes kėlinio koeficientų nėra"}</span></div>`); }
+      cards.push(`<div class="kpi"><small>Kėlinio dalis visų taškų</small><b class="num">${(S.h * 100).toFixed(1)} / ${(S.a * 100).toFixed(1)}%</b><span>${esc(homeN())} / ${esc(awayN())} · c ${S.c.toFixed(0)} · κ ${(S.kappa ?? kappaVal()).toFixed(2)} · ${S.n ? `pagal ${S.n} kėlinio lin.` : "numatyta, nes kėlinio koeficientų nėra"}</span></div>`); }
   } else if (F.hcp) {
     const pw = E.pOver(F.hcp, 0);
     cards.push(`<div class="kpi lead"><small>Laimės ${esc(homeN())}</small><b class="num">${pct(pw)}</b>
@@ -706,7 +718,7 @@ function renderSummary() {
   if (SM) {
     cards.push(`<div class="kpi"><small>Tikėtinas rezultatas</small><b class="num">${SM.mh.toFixed(0)} : ${SM.ma.toFixed(0)}</b><span>σ ${SM.sh.toFixed(1)} / ${SM.sa.toFixed(1)} · iš: ${esc(SM.src)}</span></div>`);
     let why;
-    if (SM.share) why = "iš pilno laiko ρ ir kėlinio dalių";
+    if (SM.share) why = `iš pilno laiko ρ ir kėlinio dalių, tempo κ ${(SM.share.kappa ?? kappaVal()).toFixed(2)}`;
     else if (!F.hcp && !F.tot) why = "laikoma 0: koreliacijai įvertinti reikia sumos arba handikapo";
     else {
       const alt = [SM.rho_tot != null ? `pagal sumą ${SM.rho_tot.toFixed(3)}` : "", SM.rho_hcp != null ? `pagal handikapą ${SM.rho_hcp.toFixed(3)}` : ""].filter(Boolean);
@@ -991,13 +1003,19 @@ function renderNotes() {
   const p = per();
   if (isFT()) { $("csNote").textContent = NOTES.cs; $("qNoteText").textContent = NOTES.q; $("oddsNote").textContent = NOTES.odds; return; }
   const how = ftModel()
-    ? `Kėlinio taškai skaičiuojami kaip komandos visų rungtynių taškų dalis, kaip žaidėjų dalis komandos taškuose: komandos taškai imami iš pilno laiko modelio, o dalis įvertinama iš ${p.gen} koeficientų (jei jų nėra, imama 25 %).`
+    ? `Kėlinio taškai skaičiuojami kaip komandos visų rungtynių taškų dalis, kaip žaidėjų dalis komandos taškuose: komandos taškai imami iš pilno laiko modelio, o dalis įvertinama iš ${p.gen} koeficientų (jei jų nėra, imama 25 %). Tempo koreliacija κ (viršuje, numatyta 0.3) nurodo, kiek namų ir svečių dalys kinta kartu.`
     : `Pilno laiko koeficientų nėra, todėl ${p.title} skaičiuojamas iš savo koeficientų taip pat kaip pilnas laikas.`;
   $("csNote").textContent = `Rodomas tik ${p.gen} rezultatas. ${how} Kėlinys gali baigtis lygiosiomis, todėl lygūs rezultatai rodomi ir sąraše.`;
   $("qNoteText").textContent = `Sąlygos taikomos tik ${p.gen} taškams. Visos sąlygos turi išsipildyti kartu. Kėlinyje lygiosios galimos ir nelaikomos nė vienos komandos pergale.`;
   $("oddsNote").textContent = `Įveskite ${p.gen} rinkų koeficientus. ${NOTES.odds} ${how} Kai pilno laiko modelio nėra ir rinkoje tik viena linija, numatyta σ perpus mažesnė nei pilnam laikui.`;
 }
 // Perjungus kėlinį perpiešiama viskas: koeficientų lentelės, nuotraukos, sąlygos ir santrauka.
+function renderKappa() {
+  $("kappaBox").hidden = isFT() || !ftModel(); // κ naudojama tik kėliniui, skaičiuojamam iš pilno laiko modelio
+  if (document.activeElement !== $("kappa")) $("kappa").value = state.kappa ?? String(PERIOD_KAPPA0);
+}
+$("kappa").addEventListener("input", e => { state.kappa = e.target.value; save(); renderSummary(); });
+$("kappaReset").addEventListener("click", () => { state.kappa = String(PERIOD_KAPPA0); save(); renderKappa(); renderSummary(); });
 function setPeriod(k) {
   if (!PERIODS.some(p => p.key === k)) return;
   qCtl?.abort();
@@ -1005,7 +1023,7 @@ function setPeriod(k) {
   images = imagesBy[k];
   MARKETS.forEach(m => { renderRows(m.key); renderThumbs(m.key); status(m.key, ""); $("calc-" + m.key).value = ""; calcOut(m.key); });
   $("qText").value = state.q || ""; $("qStatus").textContent = "";
-  renderConds(); renderExamples(); renderNotes(); renderPeriods(); renderSummary();
+  renderConds(); renderExamples(); renderNotes(); renderPeriods(); renderKappa(); renderSummary();
   setActive("hcp");
   if (state.tab === "cs") centerTop();
 }
@@ -1013,7 +1031,7 @@ $("period").addEventListener("click", e => { const b = e.target.closest("[data-p
 
 // ---------- events ----------
 $("markets").innerHTML = MARKETS.map(panelHTML).join("");
-renderPeriods(); renderNotes(); renderExamples();
+renderPeriods(); renderNotes(); renderExamples(); renderKappa();
 $("homeName").value = state.home || ""; $("awayName").value = state.away || "";
 MARKETS.forEach(m => { renderRows(m.key); renderThumbs(m.key); });
 setTab(["cs", "q"].includes(state.tab) ? state.tab : "odds");
