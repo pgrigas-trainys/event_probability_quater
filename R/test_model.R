@@ -83,4 +83,17 @@ near(D$mh, 22, 1e-12, "numatyta kėlinio dalis")
 near(period_share_model(FTm, list(), kappa = 0)$rho, 0.0625 * 30 / (D$sh * D$sa), 1e-9, "κ = 0")
 near(D$rho, (0.0625 * 30 + 0.3 * 0.1875 / 51 * (30 + 88 * 78)) / (D$sh * D$sa), 1e-9, "κ formulė")
 
+
+# κ įvertinimas iš koeficientų: du kėliniai sugeneruoti su κ = 0.45; trečias (viena linija) netinka.
+genq <- function(mh, ma, cc, k) {
+  t <- share_moments(FTm, mh, ma, cc, k); out <- list()
+  for (mk in list(list("hcp", c(-3.5, -1.5, 0.5, 2.5)), list("tot", c(37.5, 39.5, 41.5, 43.5, 45.5)), list("home", c(20.5, 22.5))))
+    for (kk in mk[[2]]) out[[length(out) + 1]] <- list(mk[[1]], kk, period_p_over(t, mk[[1]], kk))
+  out
+}
+rk <- fit_kappa(FTm, list(genq(0.26, 0.24, 60, 0.45), genq(0.24, 0.25, 70, 0.45), list(list("tot", 40.5, 0.5))))
+near(rk$kappa, 0.45, 0.01, "κ iš koeficientų")
+stopifnot(rk$quarters == 2, rk$lines == 22, !is.null(rk$se), rk$se < 0.05)
+stopifnot(is.null(fit_kappa(FTm, list(list(list("tot", 40.5, 0.5), list("tot", 42.5, 0.4))))))
+
 cat("Visi R testai praėjo.\n")

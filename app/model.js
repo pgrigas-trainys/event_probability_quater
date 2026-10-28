@@ -175,23 +175,63 @@ function nelderMead(f, x0, step, iters = 600) {
 }
 // M = pilno laiko scoreModel(); pts = [{key: "hcp"|"tot"|"home"|"away", k, p}] (kėlinio rinkų P(X > k) be maržos);
 // kappa = dalių (tempo) koreliacija κ.
-function periodShareModel(M, pts, kappa = PERIOD_KAPPA0, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
-  if (!M) return null;
-  kappa = Number.isFinite(Number(kappa)) ? Math.max(-1, Math.min(1, Number(kappa))) : PERIOD_KAPPA0;
-  const P = (pts || []).filter(q => SHARE_X[q.key] && isFinite(q.k) && q.p > 0 && q.p < 1);
+const cleanPts = pts => (pts || []).filter(q => SHARE_X[q.key] && isFinite(q.k) && q.p > 0 && q.p < 1);
+// Dalių mh, ma ir c parinkimas esant duotai κ. Grąžina {u: [ln mh, ln ma, ln c], f: tikslo funkcija su prielaida}.
+function shareFit(M, P, kappa, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   const l0 = Math.log(share0), lc = Math.log(c0);
-  const at = u => shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]), kappa);
+  if (!P.length) return { u: [l0, l0, lc], f: 0 };
   const obj = u => {
     if (u[0] < Math.log(0.02) || u[0] > Math.log(0.9) || u[1] < Math.log(0.02) || u[1] > Math.log(0.9) || u[2] < Math.log(2) || u[2] > Math.log(5000)) return 1e9;
-    const Q = at(u); let s = 0;
+    const Q = shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]), kappa); let s = 0;
     for (const q of P) s += (probitC(periodPOver(Q, q.key, q.k)) - probitC(q.p)) ** 2;
     return s + PERIOD_PRIOR_W * ((u[0] - l0) ** 2 + (u[1] - l0) ** 2 + (u[2] - lc) ** 2);
   };
-  const u = P.length ? nelderMead(obj, [l0, l0, lc], [0.2, 0.2, 0.5])[0] : [l0, l0, lc];
-  let sse = 0; const Q = at(u);
+  const [u, f] = nelderMead(obj, [l0, l0, lc], [0.2, 0.2, 0.5]);
+  return { u, f };
+}
+function periodShareModel(M, pts, kappa = PERIOD_KAPPA0, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+  if (!M) return null;
+  kappa = Number.isFinite(Number(kappa)) ? Math.max(-1, Math.min(1, Number(kappa))) : PERIOD_KAPPA0;
+  const P = cleanPts(pts);
+  const { u } = shareFit(M, P, kappa, share0, c0);
+  let sse = 0; const Q = shareMoments(M, Math.exp(u[0]), Math.exp(u[1]), Math.exp(u[2]), kappa);
   for (const q of P) sse += (probitC(periodPOver(Q, q.key, q.k)) - probitC(q.p)) ** 2;
   return { ...Q, rho_tot: null, rho_hcp: null, src: "pilnas laikas × kėlinio dalis",
     share: { h: Math.exp(u[0]), a: Math.exp(u[1]), c: Math.exp(u[2]), kappa, n: P.length, sse } };
+}
+
+// ---------- κ įvertinimas iš koeficientų ----------
+// κ matoma tik iš sklaidų: Var(suma) − Var(handikapas) = 4·Cov. Todėl kėlinys tinka, kai jame yra bent dvi skirtingos
+// sumos linijos ir bent dvi skirtingos handikapo arba vienos komandos taškų linijos.
+const nLines = (P, key) => new Set(P.filter(q => q.key === key).map(q => q.k)).size;
+const kappaEligible = pts => { const P = cleanPts(pts); return nLines(P, "tot") >= 2 && ["hcp", "home", "away"].some(k => nLines(P, k) >= 2); };
+function goldenMin(f, lo, hi, it = 30) {
+  const r = (Math.sqrt(5) - 1) / 2; let x1 = hi - r * (hi - lo), x2 = lo + r * (hi - lo), f1 = f(x1), f2 = f(x2);
+  for (let i = 0; i < it; i++) {
+    if (f1 < f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - r * (hi - lo); f1 = f(x1); }
+    else { lo = x1; x1 = x2; f1 = f2; x2 = lo + r * (hi - lo); f2 = f(x2); }
+  }
+  return (lo + hi) / 2;
+}
+// Bendras κ visiems tinkamiems kėliniams: kiekvienam κ kiekvieno kėlinio dalys ir c parenkami atskirai, o κ – ta, kuriai
+// bendra probit paklaida mažiausia (tinklelis kas 0.1 intervale [−0.5, 0.95], tada auksinis pjūvis).
+// groups = [pts, ...] (po vieną kiekvienam kėliniui). Paklaida (se) – iš paklaidos funkcijos kreivumo.
+const KAPPA_LO = -0.5, KAPPA_HI = 0.95;
+function fitKappa(M, groups) {
+  if (!M) return null;
+  const G = (groups || []).map(cleanPts).filter(kappaEligible);
+  if (!G.length) return null;
+  const f = k => G.reduce((s, P) => s + shareFit(M, P, k).f, 0);
+  let best = KAPPA_LO, bv = Infinity;
+  for (let i = 0; i <= 14; i++) { const k = Math.min(KAPPA_HI, KAPPA_LO + 0.1 * i), v = f(k); if (v < bv) { bv = v; best = k; } }
+  const kappa = goldenMin(f, Math.max(KAPPA_LO, best - 0.1), Math.min(KAPPA_HI, best + 0.1));
+  const N = G.reduce((s, P) => s + P.length, 0), dof = N - 3 * G.length - 1, fk = f(kappa);
+  let se = null;
+  if (dof > 0) {
+    const h = 0.02, d2 = (f(Math.min(1, kappa + h)) - 2 * fk + f(Math.max(-1, kappa - h))) / (h * h);
+    if (d2 > 0) se = Math.sqrt(2 * (fk / dof) / d2);
+  }
+  return { kappa, se, quarters: G.length, lines: N };
 }
 
 // ---------- CSV įkėlimas ----------
@@ -235,5 +275,6 @@ function parseOddsCSV(text) {
 
 if (typeof module !== "undefined") {
   module.exports = { erf, Phi, PhiInv, rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, VARS, OPS, parseOddsCSV,
-    shareMoments, periodPOver, nelderMead, periodShareModel, PERIOD_SHARE0, PERIOD_C0, PERIOD_KAPPA0 };
+    shareMoments, periodPOver, nelderMead, periodShareModel, PERIOD_SHARE0, PERIOD_C0, PERIOD_KAPPA0,
+    kappaEligible, fitKappa };
 }

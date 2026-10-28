@@ -183,22 +183,66 @@ nelder_mead <- function(f, x0, step, iters = 600) {
   list(x = X[o[1], ], f = fx[o[1]])
 }
 
+.clean_pts <- function(pts) Filter(function(q) !is.null(SHARE_X[[q[[1]]]]) && is.finite(q[[2]]) && q[[3]] > 0 && q[[3]] < 1, pts)
+
+# Dalių mh, ma ir c parinkimas esant duotai κ: list(x = c(ln mh, ln ma, ln c), f = tikslo funkcija su prielaida).
+share_fit <- function(M, P, kappa, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
+  l0 <- log(share0); lc <- log(c0)
+  if (!length(P)) return(list(x = c(l0, l0, lc), f = 0))
+  obj <- function(u) {
+    if (u[1] < log(0.02) || u[1] > log(0.9) || u[2] < log(0.02) || u[2] > log(0.9) || u[3] < log(2) || u[3] > log(5000)) return(1e9)
+    Q <- share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]), kappa)
+    sum(vapply(P, function(q) (.probit(period_p_over(Q, q[[1]], q[[2]])) - .probit(q[[3]]))^2, 0)) +
+      PERIOD_PRIOR_W * ((u[1] - l0)^2 + (u[2] - l0)^2 + (u[3] - lc)^2)
+  }
+  nelder_mead(obj, c(l0, l0, lc), c(0.2, 0.2, 0.5))
+}
+
 # M = pilno laiko score_model(); pts = sąrašas list(key, k, p) iš kėlinio koeficientų.
 period_share_model <- function(M, pts, kappa = PERIOD_KAPPA0, share0 = PERIOD_SHARE0, c0 = PERIOD_C0) {
   if (is.null(M)) return(NULL)
   kappa <- if (is.null(kappa) || !is.finite(kappa)) PERIOD_KAPPA0 else max(-1, min(1, kappa))
-  P <- Filter(function(q) !is.null(SHARE_X[[q[[1]]]]) && is.finite(q[[2]]) && q[[3]] > 0 && q[[3]] < 1, pts)
-  l0 <- log(share0); lc <- log(c0)
-  at <- function(u) share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]), kappa)
-  err <- function(Q) sum(vapply(P, function(q) (.probit(period_p_over(Q, q[[1]], q[[2]])) - .probit(q[[3]]))^2, 0))
-  obj <- function(u) {
-    if (u[1] < log(0.02) || u[1] > log(0.9) || u[2] < log(0.02) || u[2] > log(0.9) || u[3] < log(2) || u[3] > log(5000)) return(1e9)
-    err(at(u)) + PERIOD_PRIOR_W * ((u[1] - l0)^2 + (u[2] - l0)^2 + (u[3] - lc)^2)
-  }
-  u <- if (length(P)) nelder_mead(obj, c(l0, l0, lc), c(0.2, 0.2, 0.5))$x else c(l0, l0, lc)
-  Q <- at(u)
+  P <- .clean_pts(pts)
+  u <- share_fit(M, P, kappa, share0, c0)$x
+  Q <- share_moments(M, exp(u[1]), exp(u[2]), exp(u[3]), kappa)
+  sse <- sum(vapply(P, function(q) (.probit(period_p_over(Q, q[[1]], q[[2]])) - .probit(q[[3]]))^2, 0))
   c(Q, list(rho_tot = NULL, rho_hcp = NULL, src = "pilnas laikas × kėlinio dalis",
-            share = list(h = exp(u[1]), a = exp(u[2]), c = exp(u[3]), kappa = kappa, n = length(P), sse = err(Q))))
+            share = list(h = exp(u[1]), a = exp(u[2]), c = exp(u[3]), kappa = kappa, n = length(P), sse = sse)))
+}
+
+# ---------- κ įvertinimas iš koeficientų (kaip app/model.js fitKappa) ----------
+# κ matoma tik iš sklaidų: Var(suma) − Var(handikapas) = 4·Cov. Kėlinys tinka, kai jame yra bent dvi skirtingos
+# sumos linijos ir bent dvi skirtingos handikapo arba vienos komandos taškų linijos.
+KAPPA_LO <- -0.5; KAPPA_HI <- 0.95
+.n_lines <- function(P, key) length(unique(unlist(lapply(Filter(function(q) q[[1]] == key, P), `[[`, 2))))
+kappa_eligible <- function(pts) {
+  P <- .clean_pts(pts)
+  .n_lines(P, "tot") >= 2 && any(vapply(c("hcp", "home", "away"), function(k) .n_lines(P, k) >= 2, TRUE))
+}
+.golden_min <- function(f, lo, hi, it = 30) {
+  r <- (sqrt(5) - 1) / 2; x1 <- hi - r * (hi - lo); x2 <- lo + r * (hi - lo); f1 <- f(x1); f2 <- f(x2)
+  for (i in seq_len(it)) {
+    if (f1 < f2) { hi <- x2; x2 <- x1; f2 <- f1; x1 <- hi - r * (hi - lo); f1 <- f(x1) }
+    else { lo <- x1; x1 <- x2; f1 <- f2; x2 <- lo + r * (hi - lo); f2 <- f(x2) }
+  }
+  (lo + hi) / 2
+}
+# groups = sąrašas kėlinių taškų sąrašų. Grąžina list(kappa, se, quarters, lines) arba NULL.
+fit_kappa <- function(M, groups) {
+  if (is.null(M)) return(NULL)
+  G <- Filter(kappa_eligible, lapply(groups, .clean_pts))
+  if (!length(G)) return(NULL)
+  f <- function(k) sum(vapply(G, function(P) share_fit(M, P, k)$f, 0))
+  best <- KAPPA_LO; bv <- Inf
+  for (i in 0:14) { k <- min(KAPPA_HI, KAPPA_LO + 0.1 * i); v <- f(k); if (v < bv) { bv <- v; best <- k } }
+  kappa <- .golden_min(f, max(KAPPA_LO, best - 0.1), min(KAPPA_HI, best + 0.1))
+  N <- sum(lengths(G)); dof <- N - 3 * length(G) - 1; fk <- f(kappa)
+  se <- NULL
+  if (dof > 0) {
+    h <- 0.02; d2 <- (f(min(1, kappa + h)) - 2 * fk + f(max(-1, kappa - h))) / (h * h)
+    if (d2 > 0) se <- sqrt(2 * (fk / dof) / d2)
+  }
+  list(kappa = kappa, se = se, quarters = length(G), lines = N)
 }
 
 parse_cond <- function(text) {

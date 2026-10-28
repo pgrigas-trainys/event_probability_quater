@@ -152,10 +152,24 @@ def test_period_share():
         print(f"Kėlinio Monte Carlo: σ {qh.std():.3f} vs {truth.sh:.3f}, ρ {m.np.corrcoef(qh, qa)[0, 1]:.4f} vs {truth.rho:.4f}")
 
 
+def test_fit_kappa():
+    FT = m.ScoreModel(mh=88, ma=78, sh=10, sa=10, rho=0.3, src="")
+
+    def gen(mh, ma, c, k):
+        t = m.share_moments(FT, mh, ma, c, k)
+        return [(key, kk, m.period_p_over(t, key, kk)) for key, ks in
+                [("hcp", [-3.5, -1.5, 0.5, 2.5]), ("tot", [37.5, 39.5, 41.5, 43.5, 45.5]), ("home", [20.5, 22.5])] for kk in ks]
+    r = m.fit_kappa(FT, [gen(0.26, 0.24, 60, 0.45), gen(0.24, 0.25, 70, 0.45), [("tot", 40.5, 0.5)]])
+    near(r["kappa"], 0.45, 0.01, "κ iš koeficientų")
+    assert r["quarters"] == 2 and r["lines"] == 22 and r["se"] is not None and r["se"] < 0.05
+    assert m.fit_kappa(FT, [[("tot", 40.5, 0.5), ("tot", 42.5, 0.4)]]) is None
+
+
 if __name__ == "__main__":
     F, M = test_model()
     test_joint_model()
     test_against_scipy(F, M)
     test_quarter_sigma0()
     test_period_share()
+    test_fit_kappa()
     print("Visi Python testai praėjo.")

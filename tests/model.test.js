@@ -129,4 +129,18 @@ near(ph + pd + pa, 1, 1e-9, "pergalė + lygiosios + pralaimėjimas");
   near(one.mh + one.ma, 40.5, 0.05, "kėlinio suma iš vienos linijos"); near(one.share.h, one.share.a, 0.01, "lygios dalys");
 }
 
+// κ įvertinimas iš koeficientų: du kėliniai su keliomis linijomis, sugeneruoti su κ = 0.45; trečias (viena linija) netinka.
+{
+  const FT = { mh: 88, ma: 78, sh: 10, sa: 10, rho: 0.3 };
+  const gen = (mh, ma, c, k) => { const t = M.shareMoments(FT, mh, ma, c, k), pts = [];
+    for (const [key, ks] of [["hcp", [-3.5, -1.5, 0.5, 2.5]], ["tot", [37.5, 39.5, 41.5, 43.5, 45.5]], ["home", [20.5, 22.5]]])
+      for (const kk of ks) pts.push({ key, k: kk, p: M.periodPOver(t, key, kk) });
+    return pts; };
+  const r = M.fitKappa(FT, [gen(0.26, 0.24, 60, 0.45), gen(0.24, 0.25, 70, 0.45), [{ key: "tot", k: 40.5, p: 0.5 }]]);
+  near(r.kappa, 0.45, 0.01, "κ iš koeficientų"); assert.equal(r.quarters, 2); assert.equal(r.lines, 22);
+  assert.ok(r.se !== null && r.se < 0.05, "κ paklaida");
+  assert.equal(M.fitKappa(FT, [[{ key: "tot", k: 40.5, p: 0.5 }, { key: "tot", k: 42.5, p: 0.4 }]]), null, "be handikapo linijų κ neįvertinama");
+  assert.ok(M.kappaEligible([{ key: "tot", k: 40.5, p: 0.5 }, { key: "tot", k: 42.5, p: 0.4 }, { key: "away", k: 18.5, p: 0.5 }, { key: "away", k: 20.5, p: 0.3 }]));
+}
+
 console.log("Visi skaičiavimų testai praėjo.");

@@ -277,28 +277,95 @@ def nelder_mead(f, x0: list[float], step: list[float], iters: int = 600) -> tupl
     return S[0][0], S[0][1]
 
 
+def _clean_pts(pts) -> list[tuple[str, float, float]]:
+    return [(key, k, p) for key, k, p in pts if key in SHARE_X and math.isfinite(k) and 0 < p < 1]
+
+
+def share_fit(M: ScoreModel, P: list[tuple[str, float, float]], kappa: float,
+              share0: float = PERIOD_SHARE0, c0: float = PERIOD_C0) -> tuple[list[float], float]:
+    """Dalių mh, ma ir c parinkimas esant duotai κ: ([ln mh, ln ma, ln c], tikslo funkcija su prielaida)."""
+    l0, lc = math.log(share0), math.log(c0)
+    if not P:
+        return [l0, l0, lc], 0.0
+    lo_m, hi_m, lo_c, hi_c = math.log(0.02), math.log(0.9), math.log(2), math.log(5000)
+
+    def obj(u):
+        if not (lo_m <= u[0] <= hi_m and lo_m <= u[1] <= hi_m and lo_c <= u[2] <= hi_c):
+            return 1e9
+        Q = share_moments(M, math.exp(u[0]), math.exp(u[1]), math.exp(u[2]), kappa)
+        s = sum((_probit(period_p_over(Q, key, k)) - _probit(p)) ** 2 for key, k, p in P)
+        return s + PERIOD_PRIOR_W * ((u[0] - l0) ** 2 + (u[1] - l0) ** 2 + (u[2] - lc) ** 2)
+
+    return nelder_mead(obj, [l0, l0, lc], [0.2, 0.2, 0.5])
+
+
 def period_share_model(M: ScoreModel | None, pts: list[tuple[str, float, float]], kappa: float | None = PERIOD_KAPPA0,
                        share0: float = PERIOD_SHARE0, c0: float = PERIOD_C0) -> tuple[ScoreModel, dict] | None:
     """M = pilno laiko score_model(); pts = [(rinka, k, P(X > k) be maržos)] iš kėlinio koeficientų; kappa = κ."""
     if M is None:
         return None
     kappa = PERIOD_KAPPA0 if kappa is None or not math.isfinite(kappa) else max(-1.0, min(1.0, kappa))
-    P = [(key, k, p) for key, k, p in pts if key in SHARE_X and math.isfinite(k) and 0 < p < 1]
-    l0, lc = math.log(share0), math.log(c0)
-    at = lambda u: share_moments(M, math.exp(u[0]), math.exp(u[1]), math.exp(u[2]), kappa)
-    lo_m, hi_m, lo_c, hi_c = math.log(0.02), math.log(0.9), math.log(2), math.log(5000)
-
-    def obj(u):
-        if not (lo_m <= u[0] <= hi_m and lo_m <= u[1] <= hi_m and lo_c <= u[2] <= hi_c):
-            return 1e9
-        Q = at(u)
-        s = sum((_probit(period_p_over(Q, key, k)) - _probit(p)) ** 2 for key, k, p in P)
-        return s + PERIOD_PRIOR_W * ((u[0] - l0) ** 2 + (u[1] - l0) ** 2 + (u[2] - lc) ** 2)
-
-    u = nelder_mead(obj, [l0, l0, lc], [0.2, 0.2, 0.5])[0] if P else [l0, l0, lc]
-    Q = at(u)
+    P = _clean_pts(pts)
+    u, _ = share_fit(M, P, kappa, share0, c0)
+    Q = share_moments(M, math.exp(u[0]), math.exp(u[1]), math.exp(u[2]), kappa)
     sse = sum((_probit(period_p_over(Q, key, k)) - _probit(p)) ** 2 for key, k, p in P)
     return Q, {"h": math.exp(u[0]), "a": math.exp(u[1]), "c": math.exp(u[2]), "kappa": kappa, "n": len(P), "sse": sse}
+
+
+# ---------- κ įvertinimas iš koeficientų (kaip app/model.js fitKappa) ----------
+# κ matoma tik iš sklaidų: Var(suma) − Var(handikapas) = 4·Cov. Kėlinys tinka, kai jame yra bent dvi skirtingos
+# sumos linijos ir bent dvi skirtingos handikapo arba vienos komandos taškų linijos.
+KAPPA_LO, KAPPA_HI = -0.5, 0.95
+
+
+def _n_lines(P, key):
+    return len({k for kk, k, _ in P if kk == key})
+
+
+def kappa_eligible(pts) -> bool:
+    P = _clean_pts(pts)
+    return _n_lines(P, "tot") >= 2 and any(_n_lines(P, k) >= 2 for k in ("hcp", "home", "away"))
+
+
+def _golden_min(f, lo, hi, it=30):
+    r = (math.sqrt(5) - 1) / 2
+    x1, x2 = hi - r * (hi - lo), lo + r * (hi - lo)
+    f1, f2 = f(x1), f(x2)
+    for _ in range(it):
+        if f1 < f2:
+            hi, x2, f2 = x2, x1, f1
+            x1 = hi - r * (hi - lo); f1 = f(x1)
+        else:
+            lo, x1, f1 = x1, x2, f2
+            x2 = lo + r * (hi - lo); f2 = f(x2)
+    return (lo + hi) / 2
+
+
+def fit_kappa(M: ScoreModel | None, groups: list[list[tuple[str, float, float]]]) -> dict | None:
+    """Bendras κ visiems tinkamiems kėliniams (groups = po taškų sąrašą kiekvienam kėliniui)."""
+    if M is None:
+        return None
+    G = [P for P in (_clean_pts(g) for g in groups) if kappa_eligible(P)]
+    if not G:
+        return None
+    f = lambda k: sum(share_fit(M, P, k)[1] for P in G)
+    best, bv = KAPPA_LO, math.inf
+    for i in range(15):
+        k = min(KAPPA_HI, KAPPA_LO + 0.1 * i)
+        v = f(k)
+        if v < bv:
+            bv, best = v, k
+    kappa = _golden_min(f, max(KAPPA_LO, best - 0.1), min(KAPPA_HI, best + 0.1))
+    N = sum(len(P) for P in G)
+    dof = N - 3 * len(G) - 1
+    fk = f(kappa)
+    se = None
+    if dof > 0:
+        h = 0.02
+        d2 = (f(min(1, kappa + h)) - 2 * fk + f(max(-1, kappa - h))) / (h * h)
+        if d2 > 0:
+            se = math.sqrt(2 * (fk / dof) / d2)
+    return {"kappa": kappa, "se": se, "quarters": len(G), "lines": N}
 
 
 def parse_cond(text: str) -> tuple[str, str, float]:

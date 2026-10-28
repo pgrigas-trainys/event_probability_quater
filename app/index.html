@@ -176,7 +176,7 @@ input[type=file] { display: none; }
 .periods button.has::after { content: ""; position: absolute; top: 5px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .bar2 .d { background: var(--muted); }
 .prow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
-.kbox { display: flex; align-items: center; gap: 8px; font-size: .82rem; color: var(--muted); }
+.kbox { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .82rem; color: var(--muted); }
 .kbox input { width: 6ch; font-family: var(--f-mono); padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); text-align: right; }
 .kbox input:focus { border-color: var(--accent); outline: none; }
 .engine-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
@@ -205,10 +205,13 @@ input[type=file] { display: none; }
 
   <div class="prow">
     <nav class="periods" id="period" role="group" aria-label="Kėlinys"></nav>
-    <label class="kbox" id="kappaBox" title="Koreliacija tarp namų ir svečių kėlinio dalių: kai kėlinys greitas, abiejų komandų dalys kartu didesnės. 0 – dalys nepriklausomos, 1 – visiškai kartu.">
-      Tempo koreliacija κ <input id="kappa" inputmode="decimal" aria-label="Tempo koreliacija kappa">
+    <div class="kbox" id="kappaBox">
+      <label for="kappa" title="Koreliacija tarp namų ir svečių kėlinio dalių: kai kėlinys greitas, abiejų komandų dalys kartu didesnės. 0 – dalys nepriklausomos, 1 – visiškai kartu.">Tempo koreliacija κ</label>
+      <input id="kappa" inputmode="decimal">
+      <button class="btn small" type="button" id="kappaFit">Įvertinti iš koeficientų</button>
       <button class="btn small" type="button" id="kappaReset" title="Grąžinti numatytą reikšmę">Atstatyti 0.3</button>
-    </label>
+      <span class="status" id="kappaStatus"></span>
+    </div>
   </div>
 
   <nav class="tabs" role="tablist" aria-label="Rodinys">
@@ -306,7 +309,7 @@ MARKETS.forEach(m => { const base = m.base = m.sigma0; Object.defineProperty(m, 
 const KEY = "event-probability-quater-v1", OLD_KEY = "event-probability-v1";
 
 // ---------- skaičiavimo variklis: JavaScript (model.js) arba Python (model.py per Brython) ----------
-const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, periodShareModel };
+const JS_ENGINE = { rowCalc, fit, pOver, scoreModel, gridCells, conditionProbability, periodShareModel, fitKappa };
 let E = JS_ENGINE; // keičiama į laiką matuojančią versiją setEngine()
 const BRYTHON = "https://cdn.jsdelivr.net/npm/brython@3.14.3/";
 const PY_BRIDGE = `
@@ -336,6 +339,8 @@ def _bridge(name, args_json):
     if name == "period_share_model":
         r = period_share_model(_sm(a[0]), [tuple(x) for x in a[1]], a[2] if len(a) > 2 else None)
         return json.dumps({**vars(r[0]), "share": r[1]} if r else None)
+    if name == "fit_kappa":
+        return json.dumps(fit_kappa(_sm(a[0]), [[tuple(x) for x in g] for g in a[1]]))
     raise ValueError(name)
 `;
 const numRow = r => { const v = [r.l, r.a, r.b].map(x => parseFloat(String(x).replace(",", "."))); return v.every(isFinite) ? v : null; };
@@ -355,6 +360,7 @@ const PY_ENGINE = {
   gridCells: M => py("grid_cells", [M]),
   conditionProbability: (M, conds) => py("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])]),
   periodShareModel: (M, pts, kappa) => M ? py("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa]) : null,
+  fitKappa: (M, groups) => M ? py("fit_kappa", [M, groups.map(g => g.map(q => [q.key, q.k, q.p]))]) : null,
 };
 const loadScript = src => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error(src)); document.head.append(s); });
 let pyReady = null, pyKind = "";
@@ -434,6 +440,7 @@ r_bridge <- function(reqs) {
       condition_probability = condition_probability(a[[1]],
         lapply(a[[2]], function(c) list(v = c[[1]], op = c[[2]], x = c[[3]]))),
       period_share_model = period_share_model(a[[1]], a[[2]], if (length(a) > 2) a[[3]] else NULL),
+      fit_kappa = fit_kappa(a[[1]], a[[2]]),
       stop("nezinoma funkcija ", name))
   })
   .to_json(out)
@@ -496,6 +503,7 @@ const R_ENGINE = {
   gridCells: M => rReq("grid_cells", [M], () => JS_ENGINE.gridCells(M)),
   conditionProbability: (M, conds) => rReq("condition_probability", [M, conds.map(c => [c.v, c.op, Number(c.x)])], () => JS_ENGINE.conditionProbability(M, conds)),
   periodShareModel: (M, pts, kappa) => M ? rReq("period_share_model", [M, pts.map(q => [q.key, q.k, q.p]), kappa], () => JS_ENGINE.periodShareModel(M, pts, kappa)) : null,
+  fitKappa: (M, groups) => M ? rReq("fit_kappa", [M, groups.map(g => g.map(q => [q.key, q.k, q.p]))], () => JS_ENGINE.fitKappa(M, groups)) : null,
 };
 
 // Matuojamas laikas atskirai: kiek užtrunka patys skaičiavimai (model.js / model.py), o kiek puslapio piešimas.
@@ -680,9 +688,9 @@ function calcOut(key) {
 function ftModel() {
   return E.scoreModel(Object.fromEntries(MARKETS.map(m => [m.key, E.fit({ key: m.key, sigma0: m.base }, state.per.ft.rows[m.key])])));
 }
-function periodPoints() {
+function periodPoints(pk = state.period) {
   const pts = [];
-  for (const m of MARKETS) for (const r of state.rows[m.key]) { const c = E.rowCalc(m, r); if (c) pts.push({ key: m.key, k: c.k, p: c.pa }); }
+  for (const m of MARKETS) for (const r of state.per[pk].rows[m.key]) { const c = E.rowCalc(m, r); if (c) pts.push({ key: m.key, k: c.k, p: c.pa }); }
   return pts;
 }
 function modelFor(F) {
@@ -731,6 +739,7 @@ function renderSummary() {
   }
   renderCS(F, SM);
   renderQ(F, SM);
+  if (!isFT()) renderKappa(); // mygtukas „Įvertinti“ priklauso nuo įvestų kėlinio linijų
   $("summary").innerHTML = cards.join("") || `<div class="kpi"><small>Santrauka</small><b>–</b><span>Įkelkite bent vienos rinkos koeficientus.</span></div>`;
 }
 
@@ -1010,12 +1019,38 @@ function renderNotes() {
   $("oddsNote").textContent = `Įveskite ${p.gen} rinkų koeficientus. ${NOTES.odds} ${how} Kai pilno laiko modelio nėra ir rinkoje tik viena linija, numatyta σ perpus mažesnė nei pilnam laikui.`;
 }
 // Perjungus kėlinį perpiešiama viskas: koeficientų lentelės, nuotraukos, sąlygos ir santrauka.
+const quarterKeys = () => PERIODS.filter(p => p.key !== "ft").map(p => p.key);
 function renderKappa() {
   $("kappaBox").hidden = isFT() || !ftModel(); // κ naudojama tik kėliniui, skaičiuojamam iš pilno laiko modelio
   if (document.activeElement !== $("kappa")) $("kappa").value = state.kappa ?? String(PERIOD_KAPPA0);
+  // κ galima įvertinti, kai bent viename kėlinyje yra ≥ 2 sumos linijos ir ≥ 2 handikapo arba komandos taškų linijos.
+  const ok = quarterKeys().filter(k => kappaEligible(periodPoints(k)));
+  const b = $("kappaFit"); b.disabled = !ok.length;
+  b.title = ok.length ? `Įvertinti κ bendrai iš: ${ok.map(k => PERIODS.find(p => p.key === k).title).join(", ")}`
+    : "Reikia bent viename kėlinyje ≥ 2 sumos linijų ir ≥ 2 handikapo arba vienos komandos taškų linijų.";
 }
-$("kappa").addEventListener("input", e => { state.kappa = e.target.value; save(); renderSummary(); });
-$("kappaReset").addEventListener("click", () => { state.kappa = String(PERIOD_KAPPA0); save(); renderKappa(); renderSummary(); });
+async function estimateKappa() {
+  const st = $("kappaStatus"), MF = ftModel();
+  const keys = quarterKeys().filter(k => kappaEligible(periodPoints(k)));
+  if (!MF || !keys.length) { st.className = "status err"; st.textContent = "Nepakanka linijų κ įvertinti."; return; }
+  st.className = "status"; st.textContent = "Vertinama…"; $("kappaFit").disabled = true;
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const groups = keys.map(k => periodPoints(k));
+    let r = E.fitKappa(MF, groups);
+    if (E === R_T) { await rSettled(); r = E.fitKappa(MF, groups); }
+    if (!r) { st.className = "status err"; st.textContent = "Nepakanka linijų κ įvertinti."; return; }
+    state.kappa = r.kappa.toFixed(2); save(); renderKappa(); renderSummary();
+    const where = keys.map(k => PERIODS.find(p => p.key === k).title.replace(" kėlinys", "")).join(", ");
+    st.className = "status ok";
+    st.textContent = `κ = ${r.kappa.toFixed(2)}${r.se != null ? ` ± ${r.se.toFixed(2)}` : ""} · ${r.quarters > 1 ? "kėliniai" : "kėlinys"}: ${where} · ${r.lines} linijų` +
+      (r.kappa <= -0.49 || r.kappa >= 0.94 ? " · ties riba, patikrinkite koeficientus" : "") + (r.se == null ? " · paklaidos įvertinti negalima (per mažai linijų)" : "");
+  } catch (e) { console.error(e); st.className = "status err"; st.textContent = "Nepavyko įvertinti κ."; }
+  finally { renderKappa(); }
+}
+$("kappaFit").addEventListener("click", estimateKappa);
+$("kappa").addEventListener("input", e => { state.kappa = e.target.value; $("kappaStatus").textContent = ""; save(); renderSummary(); });
+$("kappaReset").addEventListener("click", () => { state.kappa = String(PERIOD_KAPPA0); $("kappaStatus").textContent = ""; save(); renderKappa(); renderSummary(); });
 function setPeriod(k) {
   if (!PERIODS.some(p => p.key === k)) return;
   qCtl?.abort();

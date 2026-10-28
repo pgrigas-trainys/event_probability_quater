@@ -16,6 +16,8 @@ todėl jos rodomos santraukoje ir tikslaus rezultato sąraše.
   koeficientų nėra, imama 25 % ir c = 50.
   Namų ir svečių dalys koreliuotos per bendrą kėlinio tempą: koreliacija κ keičiama ranka puslapio viršuje
   (numatyta 0.3; κ = 0 reiškia nepriklausomas dalis, tada lieka tik iš pilno laiko paveldėta koreliacija).
+  Mygtukas „Įvertinti iš koeficientų“ įvertina κ bendrai iš visų kėlinių, kuriuose yra bent dvi sumos linijos
+  ir bent dvi handikapo arba vienos komandos taškų linijos (κ matoma iš skirtumo tarp sumos ir handikapo sklaidos).
 - **Pilno laiko koeficientų nėra**: kėlinys skaičiuojamas iš savo koeficientų taip pat kaip pilnas laikas.
 
 Tas pats modelis yra JavaScript (`app/model.js`), Python (`python/model.py`) ir R (`R/model.R`) versijose.
